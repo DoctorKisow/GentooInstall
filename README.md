@@ -13,12 +13,12 @@ This script assumes the following:
 **Variable Definition**  
 This script uses the following prefixes to define variables:  
 ```
-   g) (g_<variable name>) - Global declaration, variables defined for use throughout  
-                            the scripts execution.  
-   l) (l_<variable name>) - Local declaration, variables defined for use in function(s),  
-                            local variables cannot be accessed globally.  
-   v) (v_<variable name>) - Variable declaration, variables defined in the configuration  
-                            file and are used globally throughout the scripts execution.  
+   g) (g_<variable name>) - Global declaration, variables defined for use throughout
+                            the scripts execution.
+   l) (l_<variable name>) - Local declaration, variables defined for use in function(s),
+                            local variables cannot be accessed globally.
+   v) (v_<variable name>) - Variable declaration, variables defined in the configuration
+                            file and are used globally throughout the scripts execution.
 ```
 
 ## License
