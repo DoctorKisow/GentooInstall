@@ -1,6 +1,6 @@
 ## Gentoo Install Script
 **install** - A script to install Gentoo according to the handbook.
-Matthew R. Kisow, D.Sc. <matthew.kisow@kisow.org>  
+Matthew R. Kisow, D.Sc. <matthew.kisow@kisow.org>
 Copyright &copy; Kisow Foundation, Inc.&reg; 2015-2017.
 
 ## Getting Started
