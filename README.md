@@ -4,18 +4,21 @@ Matthew R. Kisow, D.Sc. <matthew.kisow@kisow.org>
 Copyright &copy; Kisow Foundation, Inc.&reg; 2015-2017.
 
 ## Getting Started
-**Assumptions**
+**Assumptions**  
 This script assumes the following:  
    1. You know how to get the installation media from the Gentoo repository.  
    2. You know how to make the installation media bootable.  
    3. You are familiar with networking and are able to setup the installation media to connect to the Internet.  
 
-**Variable Definition**
-```shell
-   g) (g_<variable>) - Global declaration, variables defined for use throughout the scripts execution.  
-   l) (l_<variable>) - Local declaration, variables defined for use in function(s), local variables cannot be accessed globally.  
-   v) (v_<variable>) - Variable declaration, variables defined in the configuration file and are used globally throughout the scripts execution.
-```
+**Variable Definition**  
+This script uses the following prefixes to define variables:  
+   g) (g_<variable>) - Global declaration, variables defined for use throughout  
+                       the scripts execution.  
+   l) (l_<variable>) - Local declaration, variables defined for use in function(s),  
+                       local variables cannot be accessed globally.  
+   v) (v_<variable>) - Variable declaration, variables defined in the configuration  
+                       file and are used globally throughout the scripts execution.  
+   
 ## License
 License (GPL v3.0)
 
