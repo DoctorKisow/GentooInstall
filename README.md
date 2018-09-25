@@ -11,7 +11,11 @@ The following assumptions are made:
 ### Install 
 Using git install the script from this repository.  
 ```script
-   curl -LJO https://github.com/DoctorKisow/GentooInstall
+   livecd ~ # wget https://github.com/DoctorKisow/GentooInstall/raw/master/install
+   livecd ~ # wget https://github.com/DoctorKisow/GentooInstall/raw/master/install.conf
+   livecd ~ # wget https://github.com/DoctorKisow/GentooInstall/raw/master/install.db
+   livecd ~ # chmod +x install
+   livecd ~ # ./install
 ```
 
 ## Authors
