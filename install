@@ -1,0 +1,2580 @@
+#!/bin/bash
+#
+# install - A script to install Gentoo according to the handbook.
+# Copyright (c) 2015-2018 Matthew R. Kisow, D.Sc. <matthew.kisow@kisow.org>
+#
+# License (GPL v3.0)
+# ------------------
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+# NOTES
+# Assumptions:
+#   1) You know how to get the installation media from the Gentoo repository.
+#   2) You know how to make the installation media bootable.
+#   3) You are familiar with networking and are able to setup the installation
+#      media to connect to the Internet.
+#
+# Variable Definition:
+#   g) (g_<variable>) - Global declaration, variables defined for use throughout
+#                       the scripts execution.
+#   l) (l_<variable>) - Local declaration, variables defined for use in
+#                       function(s), local variables cannot be accessed globally.
+#   v) (v_<variable>) - Variable declaration, variables defined in the
+#                       configuration file and are used globally throughout the
+#                       scripts execution.
+
+# TODO
+# List:
+#   1) Update the "get_cflags" function with all Intel processors.
+#   2) Add more options under "use_variables".
+#   3) Error check the configuration file.
+#   4) Include a function that configures the kernel to VMWare.
+#   5) Function to check if script is up-to-date.
+
+# Scroll to the bottom of this script to follow the main script flow.
+
+## Set how the script will behave when certain conditions are encountered.
+# Enable exiting immediately if a command exits with a non-zero status.
+set -e
+
+# Enable erroring on un-bound (undefined) variables.
+set -u
+
+# Enable filename patterns that match no files to expand to a null string,
+# rather than themselves.
+shopt -s nullglob
+
+# ********************** global variable definitions *********************
+g_PROGNAME="$(basename "${0}")"
+g_CONFFILE="${g_PROGNAME}.conf"
+g_DBFILE="${g_PROGNAME}.db"
+g_VERSION="0.0.1"
+g_PROGRAM_NAME="Gentoo Install"
+g_PROGRAM_DESCRIPTION="A script to install Gentoo according to the handbook."
+g_COPYRIGHT_TEXT="Copyright (c) 2015-2018"
+g_AUTHOR_TEXT="Dr. Matthew R. Kisow"
+
+# (g_<color>_TEXT) - Variables used to control how output is displayed to the
+# screen during script execution.
+g_RED_TEXT="" g_GREEN_TEXT="" g_YELLOW_TEXT="" g_BLUE_TEXT="" g_MAGENTA_TEXT="" g_CYAN_TEXT="" g_WHITE_TEXT="" g_RESET_ATTS=""  g_ALERT_TEXT=""
+if [[ -v TERM && -n "${TERM}" && "${TERM}" != "dumb" ]]; then
+    g_RED_TEXT="$(tput setaf 1)$(tput bold)"
+    g_GREEN_TEXT="$(tput setaf 2)$(tput bold)"
+    g_YELLOW_TEXT="$(tput setaf 3)$(tput bold)"
+    g_BLUE_TEXT="$(tput setaf 4)$(tput bold)"
+    g_MAGENTA_TEXT="$(tput setaf 5)$(tput bold)"
+    g_CYAN_TEXT="$(tput setaf 6)$(tput bold)"
+    g_WHITE_TEXT="$(tput setaf 7)$(tput bold)"
+    g_RESET_ATTS="$(tput sgr0)"
+    g_ALERT_TEXT="$(tput bel)"
+fi
+
+# (g_STAGE3) - Placeholder variable for the stage tarball this must be a global
+# declaration; the default value is blank.
+
+# WARNING: DO NOT MODIFY THIS VALUE!
+
+g_STAGE3=""
+
+# (g_PREFIXSTRING) - String value used to indicate what is appended to the output
+# at the beginning of screen output during script execution.
+
+g_PREFIXSTRING="*  "
+
+# (g_SHOWPREFIX) - String value used to indicate normal script execution.
+
+g_SHOWPREFIX="${g_GREEN_TEXT}${g_PREFIXSTRING}${g_RESET_ATTS}"
+
+# (g_SCRIPT_PATH) - String value used to hold the execution path of the script.
+# This variable is important when the script calls itself during the chroot.
+
+g_SCRIPT_PATH="`dirname \"$0\"`"
+g_SCRIPT_PATH="`( cd \"$g_SCRIPT_PATH\" && pwd )`"
+
+# (g_ARG_<variable>) - Boolean values used to indicate which command line options
+# are  passed during execution; the default for all values is 0.
+
+# WARNING: DO NOT MODIFY THESE VALUE(S)!
+
+declare -i g_ARG_CHROOT=0
+declare -i g_ARG_HELP=0
+declare -i g_ARG_REPAIR=0
+declare -i g_ARG_VERSION=0
+declare -i g_ARG_FORCE_OVERWRITE=0
+
+# If the configuration file exists then source the remaining global definitions
+# from the configuration file.  If the configuration file doesn't exist display
+# an error.
+if [ -f "${g_SCRIPT_PATH}/${g_CONFFILE}" ]; then
+     source "${g_SCRIPT_PATH}/${g_CONFFILE}"
+else
+     echo
+     echo -e "${g_RED_TEXT}${g_PREFIXSTRING}${g_RESET_ATTS}ERROR: The configuration file doesn't exist." >&2
+     echo -e "          Please download it from the same location that you downloaded this script from. - exiting" >&2
+     
+     # Reset error trapping.
+     set +e
+     trap - EXIT
+     exit 1
+fi
+
+# ******************** functions ********************
+# (cleanup_and_exit_with_code) - Function used to properly cleanup the enviornment
+# after an error; the passed value are 1 (error) or 0 (normal).
+function cleanup_and_exit_with_code ()
+{
+     # (l_BOOL) - Boolean value used to indicate a value of 0 or 1.
+     l_BOOL='^[0-1]+$'
+     if ! [[ $1 =~ $l_BOOL ]]; then
+          error "Function: cleanup_and_exit_with_code was passed a value that is out of bounds."
+     fi
+
+     # If output was redirected to the logfile during an interactive session,
+     # repoint it to the console.
+     exec &>$(tty)
+
+     # Error trapping is turned off because we want to handle errors.
+     set +e
+     trap - EXIT
+
+     # If script is still chrooted then cleanup and exit the chroot.
+     if ((g_ARG_CHROOT==1)); then
+          exit_chroot 1
+     fi
+
+     unmount_mountpoints
+
+     exit $1
+}
+
+# (unmount_mountpoints) - Function used to unmount system volumes before exiting
+# the script for any reason.
+function unmount_mountpoints ()
+{
+     info "Unmounting filesystem mountpoint(s)."
+     if [[ $(mount | grep ${v_INSTALL_MOUNTPOINT}/dev/shm) ]]; then
+          info "  Unmounting temporary RAM based filesystem(s)."
+          umount --lazy ${v_INSTALL_MOUNTPOINT}/dev/shm
+     fi
+
+     if [[ $(mount | grep ${v_INSTALL_MOUNTPOINT}/dev/pts) ]]; then
+          info "  Unmounting pseudo-terminal device(s)."
+          umount --lazy ${v_INSTALL_MOUNTPOINT}/dev/pts
+     fi
+
+     if [[ $(mount | grep ${v_INSTALL_MOUNTPOINT}/dev) ]]; then
+          info "  Unmounting all special device file(s)."
+          umount --lazy ${v_INSTALL_MOUNTPOINT}/dev
+     fi
+
+     if [[ $(mount | grep ${v_INSTALL_MOUNTPOINT}) ]]; then
+          info "  Unmounting installation mountpoint(s)."
+          umount --all-targets --recursive --lazy ${v_INSTALL_MOUNTPOINT}
+     fi
+
+     if [[ $(mount | grep ${v_USBKEY_MOUNTPOINT}) ]]; then
+          info "  Unmounting temporary mountpoint(s)."
+          umount --all-targets --recursive --lazy ${v_USBKEY_MOUNTPOINT}
+     fi
+     
+     # If swap space is mounted, then unmount it.
+     if [[ $(swapon -s) ]]; then
+          info "  Disabling swap space."
+          swapoff --all
+     fi
+}
+
+# (exit_chroot) - Function used to exit the chroot enviornment; the passed value
+# is 1 (error) or 0 (normal).
+function exit_chroot ()
+{
+     # (l_BOOL) - Boolean value used to indicate a value of 0 or 1.
+     l_BOOL='^[0-1]+$'
+     if ! [[ $1 =~ $l_BOOL ]]; then
+          error "Function: exit_chroot was passed a value that is out of bounds."
+     fi
+
+     # Disable EXIT trapping, otherwise the exit_chroot function will never
+     # exit with the correct exit code as captured by l_CHROOT_EXIT.
+     trap - EXIT
+
+     # (l_CHROOT_EXIT) - Boolean value used to indicate the exit status from the
+     # chroot enviornment.
+     l_CHROOT_EXIT=${1}
+
+     info "Exiting from the chroot enviornment."
+
+     # Set the g_ARG_CHROOT boolean value back to 0 to indicate that we are no
+     # longer in the chroot enviornment.
+     g_ARG_CHROOT=0
+
+     # Change the "g_PREFIXSTRING" variable to indicate that we are no longer
+     # in the chroot enviornment.
+     g_PREFIXSTRING="*  "
+
+     exit $l_CHROOT_EXIT
+}
+
+# (script_banner) - Function used to display the program banner when it is executed 
+# interactively from the CLI.
+function script_banner ()
+{
+     clear
+     printf "${g_WHITE_TEXT}${g_PROGRAM_NAME}, v${g_VERSION}${g_RESET_ATTS}\n"
+     printf "${g_CYAN_TEXT}${g_COPYRIGHT_TEXT}, ${g_AUTHOR_TEXT}\n${g_RESET_ATTS}"
+     printf -- "--------------------------------------------------------------------------------\n"
+}
+
+# (stage) - Function for formatted stage output.
+function stage ()
+{
+     echo -e "\n${g_MAGENTA_TEXT}   Stage ${1}${g_RESET_ATTS}" >&2
+}
+
+# (info) - Function for formatted informational messages.
+function info ()
+{
+     echo -e "${g_CYAN_TEXT}${g_PREFIXSTRING}${g_RESET_ATTS}INFO: ${1}" >&2
+}
+
+# (warning) - Function for formatted warning messages.
+function warning ()
+{
+     echo -e "${g_YELLOW_TEXT}${g_PREFIXSTRING}${g_RESET_ATTS}WARNING: ${1}" >&2
+}
+
+# (error) - Function for the error catching routine, display an error cleanup
+# and exit the script.
+function error ()
+{
+    echo
+    echo -e "${g_RED_TEXT}${g_PREFIXSTRING}${g_RESET_ATTS}ERROR: ${1} - exiting" >&2
+    cleanup_and_exit_with_code 1
+}
+
+# (trap_cleanup) - Function used to set how we want the script to handle any
+# error conditions it encounters and what we want to do once those error
+# conditions are encountered.
+function trap_cleanup ()
+{
+     if ((v_DEBUG==0)); then
+          trap - SIGHUP SIGQUIT SIGINT SIGTERM SIGKILL EXIT
+          error "Caught signal"
+     fi
+}
+trap trap_cleanup SIGHUP SIGQUIT SIGINT SIGTERM SIGKILL EXIT
+
+# (set_error_trapping) - Function used to enable and disable error handeling,
+# unbound variables and filename pattern matching; the passed value is 1
+# for enabled or 0 for disabled.
+function set_error_trapping ()
+{
+     # (l_BOOL) - Boolean value used to indicate a value of 0 or 1.
+     l_BOOL='^[0-1]+$'
+     if ! [[ $1 =~ $l_BOOL ]]; then
+          error "Function: set_error_trapping was passed a value that is out of bounds."
+     fi
+
+     # (l_TRAP) - Local boolean value used to enable and disable how the script
+     # behaves when certain error conditions are met.
+     local l_TRAP="${1}"
+
+     if ((l_TRAP == 0)); then
+          # Disable errors when a command exits with a non-zero status.
+          set +e
+
+          # Disable errors on unbound (undefined) variables.
+          set +u
+
+          # Disable allowing filename patterns that match no files to expand to a null
+          # string, rather than themselves.
+          shopt -u nullglob
+     else
+          # Enable exiting immediately if a command exits with a non-zero status.
+          set -e
+
+          # Enable erroring on unbound (undefined) variables.
+          set -u
+
+          # Enable filename patterns that match no files to expand to a null
+          # string, rather than themselves.
+          shopt -s nullglob
+     fi
+}
+
+# (test_yn) - Function used to test for a "y" or "n" input from the keyboard.
+function test_yn ()
+{
+     # (l_REPLY) - Local string value used to hold the response from the keyboard.
+     local l_REPLY=""
+
+     echo -n -e "${g_SHOWPREFIX}${1} (y/n)? ${g_ALERT_TEXT}"
+     read -r -n 1
+     echo
+     if [[ ${l_REPLY} =~ ^[Yy]$ ]]; then
+          return 1
+     else
+          return 0
+     fi
+}
+
+# (press_enter_to_continue) - Function used to test for "enter" from the keyboard.
+function press_enter_to_continue ()
+{
+     echo -n -e "${g_SHOWPREFIX}Press [ENTER] to continue. ${g_ALERT_TEXT}"
+     read -r PRESS_ENTER
+}
+
+# (print_usage) - Function used to display the scripts usage and command line
+# options.
+function print_usage ()
+{
+     cat << EOF
+  Usage: ${g_PROGNAME} [options]
+  Options:
+    -c, --chroot            set the chroot flag
+    -F, --force-overwrite   perform a forced overwrite of the LVM using the 
+                            configuration file parameters
+    -h, --help              show this help message and exit
+    -r, --repair            repair an installation
+    -v, --version           display the version number of ${g_PROGNAME} and exit
+EOF
+}
+
+# (help) - Function used to display the scripts usage and command line options.
+function help ()
+{
+     printf "${g_PROGNAME} - ${g_PROGRAM_DESCRIPTION}\n"
+     print_usage
+}
+
+# (print_version) - Function used to print the script version.
+function print_version ()
+{
+     printf "%s\n" "${g_VERSION}"
+}
+
+# (display_usage_message_and_bail_out) - Function used to display the usage when 
+# an invalid command line option is passed to the script.
+function display_usage_message_and_bail_out ()
+{
+     if [ ! -z "${1+x}" ]; then
+          printf "%s: %s\n" "${g_PROGNAME}" "${1}" >&2
+     fi
+
+     print_usage >&2
+     cleanup_and_exit_with_code 1
+}
+
+# (process_command_line_options) - Function used to set and validate command line
+# options passed to the script.
+function process_command_line_options ()
+{
+     # (l_TEMP) - Local array used to hold the list of command line arguements
+     # passed from the cammandline during script execution.
+     local l_TEMP
+
+     # (l_RC) - Local boolean value used to test if any commandline arguements
+     # passed from the cammandline during script execution are invalid.
+     declare -i l_RC
+
+     # Error trapping is turned off because we want to handle errors.
+     set +e
+          l_TEMP="$(getopt -o cFhrv --long chroot,forced-overwrite,help,repair,version -n "${g_PROGNAME}" -- "${@}")"
+          l_RC="${?}"
+     set -e
+
+     # Check if any invalid options were passed and display help.
+     if ((l_RC!=0)); then
+          display_usage_message_and_bail_out
+     fi
+     eval set -- "${l_TEMP}"
+
+     # Extract the options and their arguments into variables.
+     while true ; do
+          case "${1}" in
+          -c|--chroot) g_ARG_CHROOT=1; shift ;;
+          -F|--forced-overwrite) g_ARG_FORCE_OVERWRITE=1; shift;;
+          -h|--help) g_ARG_HELP=1; shift ;;
+          -r|--repair) g_ARG_REPAIR=1; shift ;;
+          -v|--version) g_ARG_VERSION=1; shift ;;
+          --) shift; break ;;
+           *) print_usage ;;
+          esac
+     done
+
+     # Process the 'perform-then-exit' options.
+     if ((g_ARG_HELP==1)); then
+          print_usage
+          cleanup_and_exit_with_code 0
+     elif ((g_ARG_VERSION==1)); then
+          print_version
+          cleanup_and_exit_with_code 0
+     fi
+}
+
+# (internal_consistency_option_checks) - Function used to validate the some of the
+# more obvious configuration file snafus.
+function internal_consistency_option_checks ()
+{
+     ### The following are not exhaustive, just some of the more obvious snafus.
+
+     # If the processor architecture database file doesn't exist then display an error and exit.
+     if ((g_ARG_CHROOT==0)); then
+          if ! [ -f "${g_SCRIPT_PATH}/${g_DBFILE}" ]; then
+               error "The database file doesn't exist.  Please download it from the same location that you downloaded this script from. - exiting" >&2
+          fi
+     fi
+     
+     # If help is run with ANY other option exit.
+     if ((g_ARG_HELP==1)); then
+          if ((g_ARG_VERSION==1 || g_ARG_CHROOT==1)); then
+               warning "You cannot use the help option with any other option!"
+               cleanup_and_exit_with_code 1
+          fi
+     fi
+
+     # Verify the correct INIT system for the desktop enviornment.
+     if ((v_OPENRC==1 && v_XWINDOWS==1)); then
+          if [ $v_DESKTOP != "KDE" ]; then
+               warning "The configuration you have choosen will result in failure."
+               cleanup_and_exit_with_code 1
+          fi
+     fi
+     
+     # Verify the correct setting and your intention to overwrite the disk.
+     if [ $v_FORCE_DD != "YES" ]; then
+          warning "The configuration file contains an invalid setting."
+          cleanup_and_exit_with_code 1
+     fi
+     
+     # Verify the correct setting and your intention to overwrite the USB Key.
+     if ((v_DISK_ENCRYPTION==1)); then
+          if [ $v_FORCE_UDD != "YES" ]; then
+               warning "The configuration file contains an invalid setting."
+               cleanup_and_exit_with_code 1
+          fi
+     fi
+     
+     # Since an encrypted volume resides on an LVM you cannot have both enabled at the same time.
+     if ((v_LVM==1 && v_DISK_ENCRYPTION==1)); then
+          warning "The configuration file has the options v_LVM and v_DISK_ENCRYPTION enabled.\n            Only one option should be enabled at a time."
+     fi
+
+     # If a non multi-library configuration is selected you must choose a non multi-library profile
+     # otherwise there will be compile errors.
+     if [ -z $v_E_SELECT ]; then
+          if ((v_NOMULTILIB==1)); then
+               if [ $v_E_SELECT != "default/linux/amd64/17.0/no-multilib" ]; then
+                    warning "An eselect profile has been selected that doesn't match the architecture type."
+                    cleanup_and_exit_with_code 1
+               fi
+          fi
+     fi
+}
+
+# (update) - Function used to check for and update this script from the git 
+# repository ensuring this script is consistently up-to-date.
+# TODO: Finish!
+function update ()
+{
+     info "Checking for updates to the installation script."
+     emerge --oneshot dev-vcs/git &>/dev/null
+
+     ARGS="$@"
+     BRANCH="Your_git_branch"
+
+          cd $g_SCRIPT_PATH
+          git fetch
+
+          [ -n $(git diff --name-only origin/$BRANCH | grep $g_PROGNAME) ] && {
+          echo "Found a new version of me, updating myself..."
+          git pull --force
+          git checkout $BRANCH
+          git pull --force
+          echo "Running the new version..."
+          exec "$g_PROGNAME" "$@"
+
+          # Now exit this old instance
+          exit 1
+     }
+          echo "Already the latest version."
+}
+
+# (repair_install) - Function used to repair an installation.
+function repair_install ()
+{
+     info "Repairing the Gentoo Installation."
+       
+     if ((v_DISK_ENCRYPTION==1)); then
+          # Verify the temporary directory exists, if not then create it.
+          if ! [ -d $v_USBKEY_MOUNTPOINT ]; then
+               info "  Creating a temporary mountpoint for the thumb drive."
+               mkdir -p $v_USBKEY_MOUNTPOINT >> /dev/nul
+          fi
+          
+          # Mount the thumb drive to a temporary directory.
+          info "  Mounting the thumb drive."
+          mount --types vfat ${v_THUMB_DEV}1 $v_USBKEY_MOUNTPOINT >> /dev/nul
+          
+          info "  Decrypting the encrypted volume."
+          export GPG_TTY=$(tty)
+          gpg --batch --passphrase ${v_GPG_PASSPHRASE} --decrypt ${v_USBKEY_MOUNTPOINT}/luks-key.gpg 2>/dev/null | cryptsetup --key-file - luksOpen ${v_LVM_LUKS_DEV} ${v_LVM_PV} 2>/dev/null       
+     fi
+     
+     if ((v_LVM==1 || v_DISK_ENCRYPTION==1)); then
+          info "  Setting the Logical Volume Manager (LVM) variables."
+          
+          # If tmp is enabled, set the tmp partition variable.
+          if ! [ -z $v_TMP ]; then              
+               v_TMP="${v_LVM_DEV}/${v_LVM_VG_NAME}-tmp"
+          fi
+          
+          # If var is enabled, set the var partition variable.
+          if ! [ -z $v_VAR ]; then              
+               v_VAR="${v_LVM_DEV}/${v_LVM_VG_NAME}-var"
+          fi
+ 
+          # Set the swap partition variable.
+          v_SWAP="${v_LVM_DEV}/${v_LVM_VG_NAME}-swap"
+          
+          # Set the root partition variable.
+          v_SYSROOT="${v_LVM_DEV}/${v_LVM_VG_NAME}-root"
+
+          # Set the home partition variable.
+          v_HOME="${v_LVM_DEV}/${v_LVM_VG_NAME}-home"
+          
+          # Update and make available the LVM Physical Volume.
+          info "  Updating the Volume Group changes from disk."
+          vgchange --available y >> /dev/nul
+     fi
+}
+
+# (forced_overwrite) - Function used to wipe the LVM if it was written
+# by this script.  This function was used during testing and may not be
+# applicable for a production enviornment.
+function forced_overwrite ()
+{
+     info "Forcefully overwrite the LVM configuration."
+     
+     if test_yn "  Are you sure that you want to forcefully overwrite the LVM"; then
+          dmsetup remove ${v_LVM_VG_NAME}-swap
+          dmsetup remove ${v_LVM_VG_NAME}-root
+          dmsetup remove ${v_LVM_VG_NAME}-home
+          dmsetup remove ${v_LVM_PV}
+     fi
+}
+
+################################################################################
+### STAGE: 1 - Pre-setup establish networking from the minimal install to    ###
+###            automate the install of Gentoo Linux.                         ###
+################################################################################
+
+# (configure_network) - Function used to configure the network settings.
+function configure_network ()
+{
+     # (l_NIC) - Local string value used to hold the name of the NIC.
+     local l_NIC=
+
+     l_NIC=$(ip link | awk -F: '$0 !~ "lo|vir|wl|^[^0-9]"{print $2;getline}')
+     l_NIC=$(echo -e $l_NIC | sed -re 's/[[:space:]]\+/ /g')
+
+     if ((v_INST_DHCP == 1)); then
+          info "Setting a dynamic network address on: ${g_YELLOW_TEXT}$l_NIC${g_RESET_ATTS}."
+     else
+          info "Setting a static network address on: ${g_YELLOW_TEXT}$l_NIC${g_RESET_ATTS}."
+
+          ifconfig ${l_NIC} up
+          ifconfig ${l_NIC} ${v_INST_IP_ADDRESS} netmask ${v_INST_NETMASK}
+          echo "nameserver ${v_INST_DNS_1}" >> /etc/resolv.config
+          echo "nameserver ${v_INST_DNS_2}" >> /etc/resolv.config
+          route add default gw ${v_INST_GATEWAY}
+     fi
+}
+
+# (check_internet) - Function used to test for Internet connectivity.
+function check_internet ()
+{
+     info "Testing the connectivity to the Internet."
+     wget -q --tries=10 --timeout=20 --spider http://google.com
+
+     if ! [[ $? -eq 0 ]]; then
+          error "Unable to connect to the Internet."
+     fi
+}
+################################################################################
+
+
+################################################################################
+### STAGE 2: - Prepare and partition the installation disk(s).               ###
+################################################################################
+
+# (select_usbkey) - Function used to automatically select the password-protected
+# keyfile thumb drive, unless already set through the configuration file.
+function select_usbkey ()
+{
+     # (l_USBKEYS) - Local array used to hold a list of the attached USB thumb
+     # drives.
+     declare -a l_USBKEYS
+     
+     if [ -z $v_THUMB_DEV ]; then
+          info "Automatically selecting the password-protected keyfile thumb drive."
+          export l_USBKEYS=($(grep -Hv ^0$ /sys/block/*/removable | sed s/removable:.*$/device\\/uevent/ | xargs grep -H ^DRIVER=sd | sed s/device.uevent.*$/size/ | xargs grep -Hv ^0$ | cut -d / -f 4))
+
+          if [ ${#l_USBKEYS[@]} -gt 2 ]; then
+               warning "You have too many thumb drives inserted."
+               cleanup_and_exit_with_code 1
+          else
+               for i in "${l_USBKEYS[@]}"; do
+                    if ! mount | grep -q $i; then
+                         v_THUMB_DEV="/dev/"${i}
+                    fi
+               done
+          fi
+     else
+          info "The password-protected keyfile thumb drive was selected through the configuration file."
+     fi
+}
+
+# (select_disk) - Function used to manually select the installation disk, unless
+# already set through the configuration file.
+function select_disk ()
+{
+     # (l_DISK_DEV) - Local string value used to hold the name of the installation
+     # device.
+     local l_DISK_DEV=
+
+     # (l_OPT_MENU_ITEM) - Local indexed (-a) array used to hold the formatted
+     # list of values obtained from l_OPTIONS array.
+     declare -a l_OPT_MENU_ITEM=()
+
+     # (l_OPTIONS) - Local indexed (-a) array used to hold all of the available
+     # the devices that are capable of having a system installed on.
+     declare -a l_OPTIONS
+
+     # (l_I) - Local integer value used to hold the index value of the array.
+     local l_I
+
+     # (l_OPT) - Local array used to hold the list of options available to the
+     # select and case statemants.
+     local l_OPT
+
+     if [ -z $v_DISK_DEV ]; then
+          info "You have choosen to manually select the installation disk."
+          
+          readarray -t l_OPTIONS <<< "$(lsblk --include 8 --nodeps --noheadings --output NAME,SIZE --sort SIZE)"
+          IFS=$'\r\n' GLOBALIGNORE='*' command eval 'DISKS=($(lsblk --include 8 --nodeps --output NAME,SIZE --sort SIZE))'
+
+          for l_I in "${!l_OPTIONS[@]}"; do
+               l_OPT_MENU_ITEM[$l_I]="${l_OPTIONS[$l_I]%% *}"
+          done
+
+          info "  Choose the disk that Gentoo will be installed to.\n"
+          printf '%s\n' "${DISKS[@]}"
+          printf "\n"
+
+          PS3='  Please select the disk to install Gentoo to: '
+          select l_OPT in "${l_OPT_MENU_ITEM[@]}" "Quit"; do
+               case "$l_OPT" in
+                    sd*)
+                         DEVICE=$(echo $l_OPT | cut -d " " -f1)
+                         v_DISK_DEV="/dev/$DEVICE"
+                         warning "  This is a very destructive operation. All data on the choosen disk, ${g_YELLOW_TEXT}$v_DISK_DEV${g_RESET_ATTS} will be destroyed!"
+
+                         if test_yn "  Are you sure you want to overwrite ${g_YELLOW_TEXT}$v_DISK_DEV${g_RESET_ATTS}"; then
+                              l_DISK_DEV="$(echo -e ${v_DISK_DEV} | sed 's/^/"/;s/$/"/')"
+                              l_DISK_DEV="DISK_DEV=${l_DISK_DEV}"
+
+                              sed -i "s/^DISK_DEV.*/${l_DISK_DEV}/" "${g_SCRIPT_PATH}/${g_CONFFILE}"
+                              break
+                         else
+                              error "  Script execution was terminated at the operators request."
+                         fi
+                         ;;
+                    "Quit")
+                         error "  Quit has been choosen, no changes have been made."
+                         ;;
+                    *)
+                         warning "  Invalid option, please try again."
+                         ;;
+               esac
+          done
+
+          # Place a newline between menu prompt and next script message.
+          printf "\n"
+     else
+          info "The installation disk was selected through the configuration file."
+     fi
+}
+
+# (partition_usbkey) - Function used to format and mount the thumb drive.
+function partition_usbkey ()
+{
+     # (l_ENDSECTOR) - Local string value used to hold the ending sector value
+     # obtained from sgdisk.
+     local l_ENDSECTOR=""
+
+     if ((v_DISK_ENCRYPTION==1)); then
+          info "Preparing the thumb drive to store the password-protected encryption key file."
+          
+          # Check for the existence of the thumb drive prior to continuing.
+          if ! [ -b $v_THUMB_DEV ]; then
+               error "  The thumb drive specified in the configuration file is missing or a device error occured."
+          fi
+          
+          # Wipe the thumb drive and ALL partitions.
+          info "  Wiping the partition table on: ${g_YELLOW_TEXT}$v_THUMB_DEV${g_RESET_ATTS}."
+          wipefs $v_THUMB_DEV -afq
+          sgdisk --zap $v_THUMB_DEV >> /dev/nul
+
+          # Partition the USB thumb drive.
+          info "  Creating a new partition table on: ${g_YELLOW_TEXT}$v_THUMB_DEV${g_RESET_ATTS}."
+          sgdisk -g $v_THUMB_DEV >> /dev/nul
+          l_ENDSECTOR=`sgdisk -E $v_THUMB_DEV` >> /dev/nul
+          sgdisk -n 1:2048:$l_ENDSECTOR -c 1:"primary" -t 1:ef00 $v_THUMB_DEV >> /dev/nul
+     
+          # Format the thumb drive.
+          info "  Formatting the thumb drive."
+          mkfs.vfat -F32 ${v_THUMB_DEV}1 >> /dev/nul
+          
+          # Verify the temporary directory exists, if not then create it.
+          if ! [ -d $v_USBKEY_MOUNTPOINT ]; then
+               info "  Creating the temporary mountpoint for the thumb drive."
+               mkdir -p $v_USBKEY_MOUNTPOINT >> /dev/nul
+          fi
+          
+          # Mount the thumb drive to a temporary directory.
+          info "  Mounting the thumb drive."
+          mount --types vfat ${v_THUMB_DEV}1 $v_USBKEY_MOUNTPOINT >> /dev/nul
+     fi
+}
+
+# (luks_encrypt) - Function used to create a Password-Protected Keyfile for LUKS.
+function luks_encrypt ()
+{
+     # Create a encryption key on the USB thumb drive.
+     if ((v_DISK_ENCRYPTION==1)); then
+          if $(mount | grep -q ${v_THUMB_DEV}1); then
+               info "Creating the password-protected key file."
+               export GPG_TTY=$(tty)
+               dd if=/dev/urandom bs=8388607 count=1 status=none | gpg --quiet --batch --passphrase ${v_GPG_PASSPHRASE} --symmetric --cipher-algo AES256 --output ${v_USBKEY_MOUNTPOINT}/luks-key.gpg 2> /dev/null
+          else
+               error "  The thumb drive is not mounted; please reinsert the thumb drive and re-run this script again."
+               cleanup_and_exit_with_code 1
+          fi
+     fi
+}
+
+# (partition_disk) - Function used to creat a new GPT Partition on the PC's
+# Main Drive.
+function partition_disk ()
+{
+     info "Partitioning the installation disk."
+
+     # (l_ENDSECTOR) - Local string value used to hold the ending sector value
+     # obtained from sgdisk.
+     local l_ENDSECTOR=""
+    
+     # (l_BIOS_BOOT_SIZE) - Local integer value used to hold calculation for the
+     # BIOS Boot partitions size.
+     declare -i l_BIOS_BOOT_SIZE
+     
+     # Calculate the sectors for the BIOS Boot partition. 
+     ((l_BIOS_BOOT_SIZE = v_SECTORS_IN_MB * v_BIOS_BOOT_SIZE))
+     ((l_BIOS_BOOT_SIZE = l_BIOS_BOOT_SIZE + v_DISK_OFFSET))
+     
+     # (l_EFI_START_SIZE) - Local integer value used to hold the calculation for
+     # the EFI System partitions starting sector.
+     declare -i l_EFI_START_SIZE
+     
+     # (l_EFI_SIZE) - Local integer value used to hold the calculation for the 
+     # EFI System partitions size.
+     declare -i l_EFI_SIZE
+     
+     # Calculate the sectors for the EFI System partition.
+     ((l_EFI_START_SIZE = l_BIOS_BOOT_SIZE + 1))
+
+     ((l_EFI_SIZE = v_SECTORS_IN_MB * v_EFI_SIZE))
+     ((l_EFI_SIZE = l_EFI_SIZE + l_EFI_START_SIZE))
+     
+     # (l_BOOT_START_SIZE) - Local integer value used to hold the calculation for
+     # the Boot partitions starting sector.
+     declare -i l_BOOT_START_SIZE
+     
+     # (l_BOOT_SIZE) - Local integer value used to hold the calculation for the 
+     # Boot partitions size.
+     declare -i l_BOOT_SIZE
+     
+     # Calculate the sectors for the EFI System partition.
+     ((l_BOOT_START_SIZE = l_EFI_SIZE + 1))
+
+     ((l_BOOT_SIZE = v_SECTORS_IN_MB * v_BOOT_SIZE))
+     ((l_BOOT_SIZE = l_BOOT_SIZE + l_BOOT_START_SIZE))
+     
+     # Wipe the disk drive and ALL partitions.     
+     info "  Wiping partition table on: ${g_YELLOW_TEXT}$v_DISK_DEV${g_RESET_ATTS}."
+     wipefs $v_DISK_DEV -afq
+     sgdisk --zap $v_DISK_DEV >> /dev/nul
+
+     # Create a new GPT entry for the disk.
+     info "  Writing a new GPT disk header."
+     sgdisk -g $v_DISK_DEV >> /dev/nul
+     
+     # Create a "Bios Boot" partition (/dev/sdx1).
+     sgdisk -n 1:${v_DISK_OFFSET}:${l_BIOS_BOOT_SIZE} -c 1:"BIOS Boot" -t 1:ef02 $v_DISK_DEV >> /dev/nul
+
+     # Create an 512M "EFI System" partition (/dev/sdx2).
+     sgdisk -n 2:${l_EFI_START_SIZE}:${l_EFI_SIZE} -c 2:"EFI System" -t 2:ef00 $v_DISK_DEV >> /dev/nul
+
+     # Create an "Boot" partition (/dev/sdx3).
+     sgdisk -n 3:${l_BOOT_START_SIZE}:${l_BOOT_SIZE} -c 3:"Boot" -t 3:ef00 $v_DISK_DEV >> /dev/nul
+          
+     if ((v_DISK_ENCRYPTION==1)); then
+          info "  Creating an LVM partition table on: ${g_YELLOW_TEXT}$v_DISK_DEV${g_RESET_ATTS}."
+
+          # (l_LVM_START_SIZE) - Local integer value used to hold the calculation for
+          # the LVM partitions starting sector.
+          declare -i l_BOOT_START_SIZE
+
+          # Calculate the sectors for the EFI System partition.
+          ((l_LVM_START_SIZE = l_BOOT_SIZE + 1))
+
+          # Calculate the ending sector using sgdisk.
+          l_ENDSECTOR=`sgdisk -E $v_DISK_DEV` >> /dev/nul
+          
+          # Create a "Linux LVM" partition that fills the remaining space (/dev/sdx4).
+          sgdisk -n 4:${l_LVM_START_SIZE}:$l_ENDSECTOR -c 4:"Crypt LVM" -t 4:8e00 $v_DISK_DEV >> /dev/nul
+     else
+          info "  Creating a standard partition table on: ${g_YELLOW_TEXT}$v_DISK_DEV${g_RESET_ATTS}."
+
+          # (l_SWAP_START_SIZE) - Local integer value used to hold the calculation for
+          # the swap partitions starting sector.
+          declare -i l_SWAP_START_SIZE
+
+          # (l_SWAP_SIZE) - Local integer value used to hold the calculation for the 
+          # swap partitions size.
+          declare -i l_SWAP_SIZE
+
+          # Calculate the sectors for the swap partition.
+          ((l_SWAP_START_SIZE = l_BOOT_SIZE + 1))
+
+          ((l_SWAP_SIZE = v_SECTORS_IN_MB * v_SWAP_SIZE))
+          ((l_SWAP_SIZE = l_SWAP_SIZE + l_SWAP_START_SIZE))
+
+          # Create a "Swap" partition (/dev/sdx4).
+          sgdisk -n 4:${l_SWAP_START_SIZE}:${l_SWAP_SIZE} -c 4:"Swap" -t 4:8300 $v_DISK_DEV >> /dev/nul
+
+          # (l_SYSROOT_START_SIZE) - Local integer value used to hold the calculation for
+          # the system root partitions starting sector.
+          declare -i l_SYSROOT_START_SIZE
+
+          # Calculate the sectors for the EFI System partition.
+          ((l_SYSROOT_START_SIZE = l_SWAP_SIZE + 1))
+
+          # Calculate the ending sector using sgdisk.
+          l_ENDSECTOR=`sgdisk -E $v_DISK_DEV` >> /dev/nul
+          
+          # Create a "Linux Filesystem" partition that fills the remaining space (/dev/sdx5).
+          sgdisk -n 5:${l_SYSROOT_START_SIZE}:$l_ENDSECTOR -c 5:"Root" -t 5:8300 $v_DISK_DEV >> /dev/nul
+     fi
+}
+
+# (create_file_systems) - Function used to create the file systems based on
+# the configuration file options.
+function create_file_systems ()
+{    
+     if ((v_DISK_ENCRYPTION==1)); then
+          info "A LUKS encrypted volume has been selected."
+          info "  Setting up the LUKS encrypted volume."
+
+          # Overwriting the New Partition with Pseudo-Random Data.
+          if ((v_PSEUDO_RANDOM==1)); then
+               info "  Writing Pseudo-Random data to the LUKS encrypted volume on: ${g_YELLOW_TEXT}${v_LVM_LUKS_DEV}${g_RESET_ATTS}.\n           This could take a while based on the size of your encrypted volume."
+               dd if=/dev/urandom of=${v_LVM_LUKS_DEV} bs=1M status=none > /dev/null 2>&1
+          fi
+          
+          # Encrypting the LVM volume with LUKS.
+          info "  Encrypting the LVM volume with LUKS on: ${g_YELLOW_TEXT}${v_LVM_LUKS_DEV}${g_RESET_ATTS}."
+          gpg --batch --passphrase ${v_GPG_PASSPHRASE} --decrypt ${v_USBKEY_MOUNTPOINT}/luks-key.gpg 2>/dev/null | cryptsetup --cipher serpent-xts-plain64 --key-size 512 --hash whirlpool --key-file - luksFormat ${v_LVM_LUKS_DEV} 2>/dev/null
+          
+          # Verify that the device is formatted in LUKS.
+          info "  Verifying the LUKS Ksy Slot is enabled."
+          if ! (cryptsetup luksDump ${v_LVM_LUKS_DEV} | grep "Slot 0" | grep -q ENABLED); then
+               error "  The the LUKS Key Slot is reporting as empty; please verify your setup and run this script again."
+               cleanup_and_exit_with_code 1
+          fi
+          
+          # Backup the LUKS header.
+          info "  Backing up the LUKS header to: ${g_YELLOW_TEXT}${v_USBKEY_MOUNTPOINT}/luks-header.img${g_RESET_ATTS}."
+          cryptsetup luksHeaderBackup ${v_LVM_LUKS_DEV} --header-backup-file ${v_USBKEY_MOUNTPOINT}/luks-header.img >> /dev/nul
+          
+          # Creating the LVM Structure (PV->VG<-LVs) on Top of LUKS.
+          info "  Decrypting the LUKS encrypted volume."
+          gpg --batch --passphrase ${v_GPG_PASSPHRASE} --decrypt ${v_USBKEY_MOUNTPOINT}/luks-key.gpg 2>/dev/null | cryptsetup --key-file - luksOpen ${v_LVM_LUKS_DEV} ${v_LVM_PV} 2>/dev/null
+          
+          # Verify that the device was decrypted and available for use under the LVM Physical Volume.
+          info "  Verifying that the LUKS encrypted volume was decrypted."
+          if ! (ls ${v_LVM_DEV} | grep -q ${v_LVM_PV}); then
+               error "  The LUKS encrypted volume was not decrypted."
+               cleanup_and_exit_with_code 1
+          fi
+     fi
+
+     if ((v_LVM==1 || v_DISK_ENCRYPTION==1)); then
+          info "Preparing the Logical Volume Manager (LVM)."
+          
+          # Create an LVM Physical Volume (PV).
+          info "  Creating an LVM Physical Volume (PV) named: ${g_YELLOW_TEXT}${v_LVM_PV}${g_RESET_ATTS}."
+          pvcreate ${v_LVM_DEV}/${v_LVM_PV} >> /dev/nul
+
+          # Create the Volume Group on the LVM Physical Volume.
+          info "  Creating a Volume Group (VG) named: ${g_YELLOW_TEXT}$v_LVM_VG_NAME${g_RESET_ATTS} on the LVM Physical Volume."
+          vgcreate $v_LVM_VG_NAME ${v_LVM_DEV}/${v_LVM_PV} >> /dev/nul
+
+          # Create the Logical Volume(s) on the Volume Group.
+          info "Creating the Logical Volume's (LV)."
+          
+          # If tmp is enabled, create a temporary space, default 5Gib.
+          if ! [ -z $v_TMP ]; then
+               # Create the /tmp logical volume.
+               info "  Creating an LV for the tmp directory."
+               lvcreate --size ${v_TMP_SIZE}G --name tmp $v_LVM_VG_NAME >> /dev/nul
+               
+               # Set the tmp partition variable.
+               v_TMP="${v_LVM_DEV}/${v_LVM_VG_NAME}-tmp"
+          fi
+          
+          # If var is enabled, create a temporary space, default 20Gib.
+          if ! [ -z $v_VAR ]; then
+               # Create the /var logical volume.
+               info "  Creating an LV for the var directory."
+               lvcreate --size ${v_VAR_SIZE}G --name var $v_LVM_VG_NAME >> /dev/nul
+               
+               # Set the var partition variable.
+               v_VAR="${v_LVM_DEV}/${v_LVM_VG_NAME}-var"
+          fi
+          
+          # Create the swap logical volume.
+          info "  Creating an LV for the swap file-system."
+          lvcreate --size ${v_SWAP_SIZE}G --name swap $v_LVM_VG_NAME >> /dev/nul
+
+          # Set the swap partition variable.
+          v_SWAP="${v_LVM_DEV}/${v_LVM_VG_NAME}-swap"
+          
+          # Create the system root logical volume.
+          info "  Creating an LV for the system root directory."
+          lvcreate --size ${v_SYSROOT_SIZE}G --name root $v_LVM_VG_NAME >> /dev/nul
+          
+          # Set the root partition variable.
+          v_SYSROOT="${v_LVM_DEV}/${v_LVM_VG_NAME}-root"
+
+          # Create the home logical volume.
+          info "  Creating an LV for the home directory."
+          if ((v_HOME_SIZE==0)); then
+               info "  Creating an LV for the home directory using the remaining space available."
+               lvcreate --extents 95%FREE --name home $v_LVM_VG_NAME >> /dev/nul
+          else
+               info "  Creating an LV for the home directory with the size of: ${v_HOME_SIZE}G."
+               lvcreate --size ${v_HOME_SIZE}G --name home $v_LVM_VG_NAME >> /dev/nul
+          fi
+
+          # Set the home partition variable.
+          v_HOME="${v_LVM_DEV}/${v_LVM_VG_NAME}-home"
+          
+          # Commit and Make Available the LVM Physical Volume.
+          info "  Commiting the Volume Group changes to disk."
+          vgchange --available y >> /dev/nul
+     fi
+     
+     # Format the system partitions.
+     info "Formatting the system partitions."
+     
+     # Format the BIOS Boot partition in vfat format.
+     info "  Formatting the BIOS Boot partition on: ${g_YELLOW_TEXT}${v_BIOS_BOOT}${g_RESET_ATTS}."
+     mkfs.vfat -F 32 ${v_BIOS_BOOT} >> /dev/null 2>&1
+
+     # Format the EFI System partition in vfat format (/boot/efi).
+     info "  Formatting the EFI System partition on: ${g_YELLOW_TEXT}${v_EFI}${g_RESET_ATTS}."
+     mkfs.vfat -F 32 ${v_EFI} >> /dev/null 2>&1
+     
+     # Format the Boot partition in ext4 format (/boot).
+     info "  Formatting the Boot partition on: ${g_YELLOW_TEXT}${v_BOOT}${g_RESET_ATTS}."
+     mkfs.ext4 -F -m 0 -L "boot" ${v_BOOT} >> /dev/null 2>&1
+
+     # Format the system partition in ext4 format (/).
+     info "  Formatting system partition on: ${g_YELLOW_TEXT}${v_SYSROOT}${g_RESET_ATTS}."
+     mkfs.ext4 -F -m 0 -L "root" ${v_SYSROOT} >> /dev/null 2>&1
+
+     # Format the home partition in ext4 format (/home).
+     if ((v_LVM==1 || v_DISK_ENCRYPTION==1)); then
+          info "  Formatting home partition on: ${g_YELLOW_TEXT}${v_HOME}${g_RESET_ATTS}."
+          mkfs.ext4 -F -m 0 -L "home" ${v_HOME} >> /dev/null 2>&1
+     fi
+     
+     # Format the tmp partition in ext4 format (/tmp).
+     if ! [ -z $v_TMP ]; then
+          info "  Formatting tmp partition on: ${g_YELLOW_TEXT}${v_TMP}${g_RESET_ATTS}."
+          mkfs.ext4 -F -m 0 -L "tmp" ${v_TMP} >> /dev/null 2>&1
+     fi
+     
+     # Format the var partition in ext4 format (/var).
+     if ! [ -z $v_VAR ]; then
+          info "  Formatting var partition on: ${g_YELLOW_TEXT}${v_VAR}${g_RESET_ATTS}."
+          mkfs.ext4 -F -m 0 -L "var" ${v_VAR} >> /dev/null 2>&1
+     fi
+     
+     # Prepare the swap partition and turn it on.
+     info "  Preparing the swap partition on: ${g_YELLOW_TEXT}${v_SWAP}${g_RESET_ATTS}."
+     mkswap -L "swap" ${v_SWAP} >> /dev/null 2>&1
+     swapon ${v_SWAP} >> /dev/nul
+}
+
+# (mounting_root_partition) - Function used to mount the root partition.
+function mounting_root_partition ()
+{
+     info "Mounting the system partition(s)."
+     
+     # Create the installation mountpoint.
+     info "  Verifying the install mountpoint's directory structure."
+     if ! [ -d $v_INSTALL_MOUNTPOINT ]; then
+          info "    Creating the mountpoint's directory structure."
+          mkdir -p $v_INSTALL_MOUNTPOINT >> /dev/nul
+     fi
+
+     # Mount the system root partition to /.
+     info "  Mounting the root partition."
+     mount --types ext4 $v_SYSROOT $v_INSTALL_MOUNTPOINT >> /dev/nul
+     
+     # Create the home directory and mount the partition.
+     if ((v_LVM==1 || v_DISK_ENCRYPTION==1)); then 
+          # Create the /home directory structure.
+          if ! [ -d $v_INSTALL_MOUNTPOINT/home ]; then
+               info "  Creating the home directory structure."
+               mkdir -p $v_INSTALL_MOUNTPOINT/home >> /dev/nul
+          fi
+     
+          # Mount the home partition to /home.
+          info "  Mounting the home partition."
+          mount --types ext4 $v_HOME $v_INSTALL_MOUNTPOINT/home
+     fi
+     
+     # Create the tmp directory and mount the partition.
+     if ! [ -z $v_TMP ]; then 
+          # Create the /tmp directory structure.
+          if ! [ -d $v_INSTALL_MOUNTPOINT/tmp ]; then
+               info "  Creating the tmp directory structure."
+               mkdir -p $v_INSTALL_MOUNTPOINT/tmp >> /dev/nul
+          fi
+     
+          # Mount the tmp partition to /tmp.
+          info "  Mounting the tmp partition."
+          mount --types ext4 $v_TMP $v_INSTALL_MOUNTPOINT/tmp
+     fi
+     
+     # Create the var directory and mount the partition.
+     if ! [ -z $v_VAR ]; then 
+          # Create the /var directory structure.
+          if ! [ -d $v_INSTALL_MOUNTPOINT/var ]; then
+               info "  Creating the var directory structure."
+               mkdir -p $v_INSTALL_MOUNTPOINT/var >> /dev/nul
+          fi
+     
+          # Mount the var partition to /var.
+          info "  Mounting the var partition."
+          mount --types ext4 $v_VAR $v_INSTALL_MOUNTPOINT/var
+     fi
+}
+################################################################################
+
+
+################################################################################
+### STAGE 3: - Installing and Validating the Gentoo Installation files.      ###
+################################################################################
+
+# (get_date_time) - Function used to get the date and time manually, this function
+# is called by the "set_date" function.
+function get_date_time ()
+{
+     # (l_DATE) - Local string value used to hold the date.
+     local l_DATE=""
+
+     # (l_TIME) - Local string value used to hold the time.
+     local l_TIME=""
+
+     while true; do
+          read -p "Please enter the current date, (YYYY-MM-DD): " l_DATE
+          if [[ "$l_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && date -d "$l_DATE" >/dev/null; then
+               break
+          else
+               warning "The date entered, ${g_YELLOW_TEXT}$l_DATE${g_RESET_ATTS} is not in a valid format."
+          fi
+     done
+
+     while true; do
+          read -p "Please enter the current time in military format, (HH:MM): " l_TIME
+          if [[ "$l_TIME" =~ ^[0-9]{2}:[0-9]{2}$ ]] && date -d "$l_TIME" >/dev/null; then
+               break
+          else
+               warning "The time entered, ${g_YELLOW_TEXT}$l_TIME${g_RESET_ATTS} is not in a valid format."
+          fi
+     done
+
+     date +%Y%m%d -s "${l_DATE}" >/dev/null
+     date +%T -s "${l_TIME}:00" >/dev/null
+}
+
+# (set_date) - Function used to set the current date and time.
+function set_date ()
+{
+     info "Setting the systems date and time."
+     if ((v_DATE_TIME == 1)); then
+          info "  Setting the date and time automatically."
+          date -s "$(wget -qSO- --max-redirect=0 google.com 2>&1 | grep Date: | cut -d' ' -f5-8)Z" >>/dev/nul
+          if [ $? == 1 ]; then
+               warning "  A time server could not be reached, setting the system time manually."
+               get_date_time
+          fi
+     else
+          info "  Setting the system time manually."
+          get_date_time
+     fi
+}
+
+# (retreive_stage3) - Function used to choose and download the stage tarball.
+function retreive_stage3 ()
+{
+     # (l_GENTOO_RELEASE_URL) - Local string value used to hold the location of
+     # the text file that contains the latest stage tarball build date.
+     local l_GENTOO_RELEASE_URL=http://distfiles.gentoo.org/releases/amd64/autobuilds/latest-stage3-amd64.txt
+
+     # (l_RELEASEDATE) - Local string value used to hold the tarball release
+     # date obtained from the downloaded latest-stage3-amd64.txt file.
+     local l_RELEASEDATE=""
+
+     # (l_GENTOO_URL) - Local string value used to hold the location of the
+     # latest stage tarball.
+     local l_GENTOO_URL=""
+
+     # If v_RELEASEDATE in the configuration file is not set then procede to get
+     # the latest-stage3-amd64.txt file from the Gentoo servers; this text file
+     # holds the latest release date for the stage tarball.  If however
+     # v_RELEASEDATE is populated then set the release date accordingly.
+
+     if [ -z "$v_RELEASEDATE" ]; then
+          info "Getting the current stage tarball release information from the server."
+          if [[ `wget -S --spider $l_GENTOO_RELEASE_URL 2>&1 | grep 'HTTP/1.1 200 OK'` ]]; then
+               wget -q -c $l_GENTOO_RELEASE_URL
+               info "  Extracting the stage tarball release date."
+               l_RELEASEDATE=`(awk 'NR==3' latest-stage3-amd64.txt | sed 's/^\(.*\)\/.*$/\1/')`
+               rm  -f latest-stage3-amd64.txt
+          else
+               error "  Unable to retrieve the latest-stage3-amd64.txt file."
+          fi
+     else
+          info "  Setting the stage tarball release information from the configuration file."
+          l_RELEASEDATE="${v_RELEASEDATE}"
+     fi
+
+     # Get the current stage tarball.
+     if ((v_NOMULTILIB==1)); then
+          l_GENTOO_URL=http://distfiles.gentoo.org/releases/amd64/autobuilds/$l_RELEASEDATE/stage3-amd64-nomultilib-$l_RELEASEDATE.tar.$v_COMPRESSION
+          g_STAGE3="stage3-amd64-nomultilib-$l_RELEASEDATE.tar.$v_COMPRESSION"
+     else
+          l_GENTOO_URL=http://distfiles.gentoo.org/releases/amd64/autobuilds/$l_RELEASEDATE/stage3-amd64-$l_RELEASEDATE.tar.$v_COMPRESSION
+          g_STAGE3="stage3-amd64-$l_RELEASEDATE.tar.$v_COMPRESSION"
+     fi
+
+     info "  Downloading the current stage tarball and its signature digest file(s)."
+     if [[ `wget -S --spider $l_GENTOO_URL 2>&1 | grep 'HTTP/1.1 200 OK'` ]]; then
+          wget -c -q $l_GENTOO_URL
+          wget -c -q ${l_GENTOO_URL}.CONTENTS
+          wget -c -q ${l_GENTOO_URL}.DIGESTS
+          wget -c -q ${l_GENTOO_URL}.DIGESTS.asc
+     else
+          error "Unable to retreive the stage tarball and its signature digest file(s)."
+     fi
+}
+
+# (verify_signature) - Function used to verify the GPG signature for the stage
+# tarball, this function is called by the "verify_stage3" function.
+function verify_signature ()
+{
+     # (l_INFILE) - Local string value used to hold the path and file name to be
+     # validated against its GPG signature.
+     local l_INFILE=$1
+
+     # (l_OUT) - Local string value used to hold the results from the GPG signature
+     # to validate against the AWR_FINGERPRINT.
+     local l_OUT=
+
+     if l_OUT=$(gpg --status-fd 1 --verify "$l_INFILE" 2>/dev/null) &&
+          echo "$l_OUT" | grep -qs "^\[GNUPG:\] VALIDSIG $v_GENTOO_AWR_FINGERPRINT "; then
+          return 0
+     else
+          echo "$l_OUT" >&2
+          return 1
+     fi
+}
+
+# (verify_stage3) - Function used to cryptographically verify the stage tarball.
+function verify_stage3 ()
+{
+     # (l_AWR_FINGERPRINT) - Local string value used to hold the fingerprint
+     # obtained from the GPG server.
+     local l_AWR_FINGERPRINT
+
+     info "Verifying the stage tarball against the Gentoo public key and associated fingerprint."
+     # Retreive the Gentoo Automated Weekly Release Public Key from the key server.
+     gpg -q --keyserver pool.sks-keyservers.net --recv-key $v_GENTOO_AWR_KEY
+
+     # Compare the "$GPG_AWR_KEY" to it's fingerprint.
+     gpg --fingerprint $v_GENTOO_AWR_KEY > awr_fingerprint.txt
+     l_AWR_FINGERPRINT=`(awk 'NR==2' awr_fingerprint.txt | awk '{$1=$1;print}')`
+     rm  -f awr_fingerprint.txt
+     if ! [ "$v_GENTOO_AWR_FINGERPRINT" == "${l_AWR_FINGERPRINT// /}" ]; then
+          error "  The release fingerprint does not match.  There is a possible security issue."
+     fi
+
+     # Verify the tarball and the contents against the "DIGESTS.asc" checksum signature.
+     if verify_signature ${g_STAGE3}.DIGESTS.asc; then
+          awk '/SHA512 HASH/{getline;print}' ${g_STAGE3}.DIGESTS.asc | sha512sum --check --strict --status
+          if [[ $? != 0 ]]; then
+               error "  The file checksums do not match.  There is a possible security issue."
+          fi
+     fi
+}
+
+# (unpack_stage3) - Function to unpack the Gentoo stage tarball then clean up.
+function unpack_stage3 ()
+{
+     info "Unpacking the stage tarball."
+     tar xpf $g_STAGE3 --xattrs-include='*.*' --numeric-owner
+     rm -f $g_STAGE3*
+}
+
+# (configuring_compile_options) - Function used to create the ".bashrc" and
+# "make.conf" configuration files.
+function configuring_compile_options ()
+{
+     # Disable error handeling then write out the portage configuration files.
+     set_error_trapping 0
+
+     info "Writing the default portage configuration file(s)."
+
+     cat <<'EOF' >> ${v_INSTALL_MOUNTPOINT}/root/.bashrc
+     #Taking advantage of parallelism in the processor.
+     export NUMCPUS=$(nproc)
+     export NUMCPUSPLUSONE=$(( NUMCPUS + 1 ))
+     export MAKEOPTS="-j${NUMCPUSPLUSONE} -l${NUMCPUS}"
+     export EMERGE_DEFAULT_OPTS="--jobs=${NUMCPUSPLUSONE} --load-average=${NUMCPUS}"
+EOF
+
+     # Remove leading spaces in front of each line in the file.
+     sed -i "s/^[ \t]*//" ${v_INSTALL_MOUNTPOINT}/root/.bashrc
+
+     # Ensure the .bashrc file is picked up by root's login shell.
+     cp ${v_INSTALL_MOUNTPOINT}/etc/skel/.bash_profile ${v_INSTALL_MOUNTPOINT}/root/
+
+     # Setting up essential Portage variables.
+     rm ${v_INSTALL_MOUNTPOINT}/etc/portage/make.conf
+
+     # Setting up a default "make.conf" portage configuration file.
+     cat <<'EOF' >> ${v_INSTALL_MOUNTPOINT}/etc/portage/make.conf
+     # Portage Make Configuration File
+     # Copyright 2016-2018 Matthew R. Kisow, D.Sc.
+     # Build Setup: 12 February 2018
+
+     # C and C++ compiler options for GCC.
+     CFLAGS="-march=native -O2 -pipe"
+     CXXFLAGS="${CFLAGS}"
+
+     # Note: MAKEOPTS and EMERGE_DEFAULT_OPTS are set in .bashrc
+
+     # Only free software, please.
+     ACCEPT_LICENSE="-* @FREE CC-Sampling-Plus-1.0"
+
+     # WARNING: Changing your CHOST is not something that should be done lightly.
+     # Please consult http://www.gentoo.org/doc/en/change-chost.xml before changing.
+     CHOST="x86_64-pc-linux-gnu"
+
+     # Use the 'stable' branch - 'testing' no longer required for Gnome 3.
+     ACCEPT_KEYWORDS="amd64"
+
+     # Additional USE flags in addition to those specified by the current profile.
+     USE=""
+     CPU_FLAGS_X86=""
+
+     # Important Portage directories.
+     PORTDIR="/usr/portage"
+     DISTDIR="${PORTDIR}/distfiles"
+     PKGDIR="${PORTDIR}/packages"
+
+     # This sets the language of build output to English.
+     # Please keep this setting intact when reporting bugs.
+     LC_MESSAGES=C
+
+     # Turn on logging - see: http://gentoo-en.vfose.ru/wiki/Gentoo_maintenance.
+     PORTAGE_ELOG_CLASSES="info warn error log qa"
+     # Echo messages after emerge, also save to /var/log/portage/elog
+     PORTAGE_ELOG_SYSTEM="echo save"
+
+     # Ensure elogs saved in category subdirectories
+     FEATURES="split-elog"
+
+     #Gentoo Mirrors
+     GENTOO_MIRRORS="http://mirrors.rit.edu/gentoo http://mirror.iawnet.sandia.gov/gentoo http://www.gtlib.gatech.edu/pub/gentoo http://lug.mtu.edu/gentoo"
+
+     # GPG Signature checking with webrsync.
+     #FEATURES="${FEATURES} webrsync-gpg"
+     #PORTAGE_GPG_DIR=/var/lib/gentoo/gkeys/keyrings/gentoo/release
+EOF
+
+     # Enable error handeling.
+     set_error_trapping 1
+
+     # Remove leading spaces in front of each line in the file.
+     sed -i "s/^[ \t]*//" ${v_INSTALL_MOUNTPOINT}/etc/portage/make.conf
+
+}
+
+# (get_cflags) - Function used to properly set the CFLAGS and CHOST per: 
+# https://wiki.gentoo.org/wiki/Safe_CFLAGS
+function get_cflags ()
+{
+     # (l_PROCESSOR) - Local string value used to hold the processor type from
+     # the processor architecture.
+     local l_PROCESSOR=""
+
+     # (l_CFLAGS) - Local string value used to hold the CFLAGS values for the
+     # processor architecture.
+     local l_CFLAGS=""
+
+     # (l_CFLAGS) - Local string value used to hold the CHOST values for the
+     # processor architecture.
+     local l_CHOST=""
+
+     info "Setting the CHOST and CFLAGS build variables for your processor."
+
+     # Read the processor information.
+     l_PROCESSOR=$(grep -m1 "model name" /proc/cpuinfo | sed -re 's/[[:space:]]\+/ /g')
+     # Remove the processor speed from the end of the string.
+     l_PROCESSOR=$(echo -e $l_PROCESSOR | sed 's/@.*$//')
+     l_PROCESSOR=$(echo -e $l_PROCESSOR | sed -re 's/[[:space:]]\+/ /g')
+     # Remove the word "CPU" if it exists.
+     l_PROCESSOR=$(echo -e $l_PROCESSOR | sed 's/\<CPU\>//g')
+     l_PROCESSOR=$(echo -e $l_PROCESSOR | sed -re 's/[[:space:]]\+/ /g')
+     # Remove the word "model name" and the associated ":".
+     l_PROCESSOR=$(echo -e $l_PROCESSOR | sed 's/^model name.*://g')
+     l_PROCESSOR=$(echo -e $l_PROCESSOR | sed -re 's/[[:space:]]\+/ /g')
+     # Remove the processor branding.
+     l_PROCESSOR=$(echo $l_PROCESSOR | sed 's/^Intel(R)//g')
+     l_PROCESSOR=$(echo -e $l_PROCESSOR | sed -re 's/[[:space:]]\+/ /g')
+     # Remove the processor type.
+     l_PROCESSOR=$(echo $l_PROCESSOR | sed 's/^Core(TM)2 Duo//' | sed 's/^Core(TM)//g' | sed 's/^Xeon(R)//g' | sed 's/^Pentium(R)//g')
+     l_PROCESSOR=$(echo -e $l_PROCESSOR | sed -re 's/[[:space:]]\+/ /g')
+
+     l_CHOST=$(awk -v var="$l_PROCESSOR" -F ";" '$1 ~ var {printf $2"\n"}' "${g_SCRIPT_PATH}/${g_DBFILE}")
+     l_CFLAGS=$(awk -v var="$l_PROCESSOR" -F ";" '$1 ~ var {printf $3"\n"}' "${g_SCRIPT_PATH}/${g_DBFILE}")
+
+     if [ -z "$l_CHOST" ]; then
+          warning " The database did not contain settings for your processors architecture, using safe default settings."
+          l_CHOST="x86_64-pc-linux-gnu"
+     fi
+
+     if [ -z "$l_CHOST" ]; then
+          warning " The database did not contain settings for your processors architecture, using safe default settings."
+          l_CFLAGS="-O2 -pipe -march=native"
+     fi
+
+     l_CHOST="$(echo -e $l_CHOST | sed 's/^/"/;s/$/"/')"
+     l_CHOST="CHOST=$l_CHOST"
+     sed -i "s/^CHOST.*/${l_CHOST}/g" ${v_INSTALL_MOUNTPOINT}/etc/portage/make.conf
+
+     l_CFLAGS="$(echo -e $l_CFLAGS | sed 's/^/"/;s/$/"/')"
+     l_CFLAGS="CFLAGS=$l_CFLAGS"
+     sed -i "s/^CFLAGS.*/${l_CFLAGS}/g" ${v_INSTALL_MOUNTPOINT}/etc/portage/make.conf
+}
+################################################################################
+
+
+################################################################################
+### Stage 4: - Installing the Gentoo base system.                            ###
+################################################################################
+# (distribution_files) - Function used to select the Gentoo distribution mirrors.
+function distribution_files ()
+{
+     # (l_DIST_MIRROR) - Local string value used to temproarially hold the
+     # "GENTOO_MIRRORS=" string.
+     local l_DIST_MIRROR='GENTOO_MIRRORS='
+     
+     info "Selecting the Gentoo distribution mirrors."
+     
+     if ! [ -z "$v_DIST_MIRROR" ]; then
+          info "  Using pre-selected distribution mirror(s)."
+          v_DIST_MIRROR="$l_DIST_MIRROR\"${v_DIST_MIRROR}\""
+
+          sed -i "s|^GENTOO_MIRRORS=.*|${v_DIST_MIRROR}|g" ${v_INSTALL_MOUNTPOINT}/etc/portage/make.conf
+          return
+     fi
+
+     while [ "$v_DIST_MIRROR" == "" ]; do
+          info "  Select one or more distribution mirror(s) from the list."
+          press_enter_to_continue
+
+          v_DIST_MIRROR="$(mirrorselect -i -o -H)"
+          v_DIST_MIRROR="$(echo -e ${v_DIST_MIRROR} | sed -e 's/^[[:space:]]*//')"
+
+          sed -i "s|^GENTOO_MIRRORS=.*|$v_DIST_MIRROR|g" ${v_INSTALL_MOUNTPOINT}/etc/portage/make.conf
+     done
+}
+
+# (ebuild_repository) - Function used to select the Gentoo rsync mirror.
+function ebuild_repository ()
+{
+     # (l_RSYNC_MIRROR) - Local string value used to temproarially hold the
+     # "sync-uri =" string.
+     local l_RSYNC_MIRROR='sync-uri ='
+
+     info "Selecting the Gentoo rsync mirror."
+     
+     mkdir -p ${v_INSTALL_MOUNTPOINT}/etc/portage/repos.conf
+     cp -rf ${v_INSTALL_MOUNTPOINT}/usr/share/portage/config/repos.conf ${v_INSTALL_MOUNTPOINT}/etc/portage/repos.conf/gentoo.conf
+
+     if ! [ -z "$v_RSYNC_MIRROR" ]; then
+          info "  Using pre-selected rsync mirror."
+          v_RSYNC_MIRROR="$l_RSYNC_MIRROR $v_RSYNC_MIRROR"
+
+          sed -i "s|^sync-uri.*|${v_RSYNC_MIRROR}|g" ${v_INSTALL_MOUNTPOINT}/etc/portage/repos.conf/gentoo.conf
+          sed -i 's/auto-sync.*/auto-sync = no/' ${v_INSTALL_MOUNTPOINT}/etc/portage/repos.conf/gentoo.conf
+          sed -i 's/sync-rsync-verify-metamanifest.*//g' ${v_INSTALL_MOUNTPOINT}/etc/portage/repos.conf/gentoo.conf
+          sed -i 's/sync-openpgp-key-path.*//g' ${v_INSTALL_MOUNTPOINT}/etc/portage/repos.conf/gentoo.conf
+          sed -i 's/#.*//g' ${v_INSTALL_MOUNTPOINT}/etc/portage/repos.conf/gentoo.conf
+          return
+     fi
+
+     while [ "$v_RSYNC_MIRROR" == "" ]; do
+          info "  Select an rsync mirror from the list."
+          press_enter_to_continue
+
+          v_RSYNC_MIRROR="$(mirrorselect -i -r -o | sed 's/^SYNC=/sync-uri = /;s/"//g')"
+          v_RSYNC_MIRROR="$(echo -e ${v_RSYNC_MIRROR} | sed -e 's/^[[:space:]]*//')"
+
+          sed -i "s|^sync-uri.*|#${v_RSYNC_MIRROR}|g" ${v_INSTALL_MOUNTPOINT}/etc/portage/repos.conf/gentoo.conf
+          sed -i 's/#.*//g' ${v_INSTALL_MOUNTPOINT}/etc/portage/repos.conf/gentoo.conf
+          sed -i 's/auto-sync.*/auto-sync = no/' ${v_INSTALL_MOUNTPOINT}/etc/portage/repos.conf/gentoo.conf
+     done
+}
+
+# (copy_dns) - Function used to copy the DNS resolver information into build
+# enviornment.
+function copy_dns ()
+{
+     info "Copying the DNS resolver files to build enviornment."
+     cp --dereference /etc/resolv.conf ${v_INSTALL_MOUNTPOINT}/etc/
+}
+
+# (mount_subtree) - Function used to mount the necessary system sub-trees for
+# installation.
+function mount_subtree ()
+{
+     info "Mounting the necessary system sub-trees."
+     mount --types proc /proc ${v_INSTALL_MOUNTPOINT}/proc
+     mount --rbind /sys ${v_INSTALL_MOUNTPOINT}/sys
+     mount --make-rslave ${v_INSTALL_MOUNTPOINT}/sys
+     mount --rbind /dev ${v_INSTALL_MOUNTPOINT}/dev
+     mount --make-rslave ${v_INSTALL_MOUNTPOINT}/dev
+}
+
+# (prepare_chroot) - Function used to prepare and enter the build environment.
+function prepare_chroot ()
+{
+     info "Script preparing to enter the chroot enviornment."
+
+     # Copy the script and install flag to the mountpoint.
+     info "  Copying the script to the installation enviornment."
+     cp -f ${g_SCRIPT_PATH}/${g_PROGNAME} ${v_INSTALL_MOUNTPOINT}/${g_PROGNAME}
+
+     info "  Copying the configuration file to the installation enviornment."
+     cp -f ${g_SCRIPT_PATH}/${g_CONFFILE} ${v_INSTALL_MOUNTPOINT}/${g_CONFFILE}
+
+     cd $v_INSTALL_MOUNTPOINT
+     
+     if ((g_ARG_REPAIR==1)); then
+          chroot ${v_INSTALL_MOUNTPOINT} $(which env) -i TERM=$TERM ./install "-rc"
+     else
+          chroot ${v_INSTALL_MOUNTPOINT} $(which env) -i TERM=$TERM ./install "-c"
+     fi
+}
+
+# (inside_chroot) - Function used to setup the chroot environment.  This function
+# is called after we enter the chroot by the script inside the chroot enviornment
+# and the --chroot switch.
+function inside_chroot ()
+{
+     info "Setup the chroot enviornment, import the Bash profile."
+
+     # Disable error handeling then source the /etc/profile to establish the bash
+     # working enviornment while in chroot.
+     set_error_trapping 0
+     source /etc/profile
+
+     # Enable error handeling.
+     set_error_trapping 1
+}
+
+# (mount_boot) - Function to mount the /boot and /boot/efi directory structure
+# inside the chroot enviornment.
+function mount_boot ()
+{
+     info "Mounting the boot directory structure."
+
+     # Create the /boot directory structure.
+     if ! [ -d /boot ]; then
+          info "  Creating the /boot directory structure."
+          mkdir -p /boot >> /dev/nul
+     fi  
+
+     # Mounting the /boot partition.
+     info "  Mounting the /boot partition."
+     mount --types ext4 $v_BOOT /boot >> /dev/nul
+
+     # Create the /boot/efi directory structure.
+     if ! [ -d /boot/efi ]; then
+          info "  Creating the /boot/efi directory structure."
+          mkdir -p /boot/efi >> /dev/nul
+     fi
+
+     # Mounting the /boot/efi partition.
+     info "  Mounting the /boot/efi partition."
+     mount --types vfat $v_EFI /boot/efi
+}
+
+# (update_portage) - Function used to update the portage tree.
+function update_portage ()
+{
+     # (l_PORTAGE_RELEASE_KEY_STORE) - Local string value used to hold the path
+     # to the portage key store.
+     local l_PORTAGE_RELEASE_KEY_STORE
+
+     info "Updating the portage tree"
+     
+     # Install an un-signed portage snapshot.
+     info "  Installing an un-signed portage snapshot."
+     emerge-webrsync &>/dev/null
+
+     # Install gnupg and Gentoo keys to validate the signed portage update(s).
+     info "  Installing gnupg and Gentoo keys to facilitate signed portage update(s)."
+     emerge --oneshot app-crypt/gentoo-keys app-crypt/gnupg &>/dev/null
+
+     # Set the security on the portage release directory.
+     chmod 700 $v_PORTAGE_RELEASE_KEY_STORE
+
+     # Remove the un-signed portage timestamp to facilitate an update.
+     rm -f /usr/portage/metadata/timestamp.x
+
+     # Set the portage configuration file to use signed updates.
+     sed -i '/^#FEATURES=\"${FEATURES} webrsync-gpg\"/s/^#//' /etc/portage/make.conf
+     sed -i '/^#PORTAGE_GPG_DIR=.*/s/^#//' /etc/portage/make.conf
+
+     l_PORTAGE_RELEASE_KEY_STORE="$(echo -e ${v_PORTAGE_RELEASE_KEY_STORE} | sed 's/^/"/;s/$/"/')"
+     l_PORTAGE_RELEASE_KEY_STORE="PORTAGE_GPG_DIR=${l_PORTAGE_RELEASE_KEY_STORE}"
+
+     # Install the signed portage snapshot.
+     info "  Installing the signed portage snapshot."
+     emerge-webrsync &>/dev/null
+     emerge --oneshot portage &>/dev/null
+
+     # Set the metadata; masters = gentoo
+     sed -i 's/^masters =.*/masters = gentoo/g' /usr/portage/metadata/layout.conf
+}
+
+# (sync_portage) - Function used to sync the portage tree and repositories.
+function sync_portage ()
+{
+     info "Syncing the portage repositories."
+     emerge --sync --quiet &>/dev/null
+}
+
+# (eselect_profile) - Function used to select a default eselect profile.
+function eselect_profile ()
+{
+     # (l_OPT) - Local array used to hold the list of options available to the
+     # select and case statements.
+     local l_OPT=""
+
+     info "Selection of an e-select profile"
+     
+     if ! [ -z $v_E_SELECT ]; then
+          info "  Setting the eselect profile to the script default: ${g_YELLOW_TEXT}${v_E_SELECT}${g_RESET_ATTS}"
+          eselect profile set ${v_E_SELECT}
+          return
+     else
+          select l_OPT in "Server" "Workstation"; do
+               case "$l_OPT" in
+                    Server)
+                         info "  Setting the eselect profile to the server profile."
+                         if ((v_NOMULTILIB==1)); then
+                              eselect profile set default/linux/amd64/17.0/no-multilib
+                              break
+                         else
+                              eselect profile set default/linux/amd64/17.0
+                              break
+                         fi
+                         ;;
+                    Workstation)
+                         info "  Setting the eselect profile to the workstation profile."
+                         if ((v_NOMULTILIB==1)); then
+                              warning "  Desktop enviornments benefit from multilib settings; choosing a non-desktop profile."
+                              eselect profile set default/linux/amd64/17.0/no-multilib
+                              break
+                         else
+                              eselect profile set default/linux/amd64/17.0/desktop
+                              break
+                         fi
+                         ;;
+                    *)
+                         warning "  Invalid option, please try again."
+                         ;;
+               esac
+          done
+     fi
+}
+
+# (timezone_locale) - Function used to configure the timezone and locale.
+function timezone_locale ()
+{
+     info "Configuring the timezone and locale."
+     
+     info "  Setting the default timezone to: ${g_YELLOW_TEXT}$v_TIMEZONE${g_RESET_ATTS}."
+     echo -e $v_TIMEZONE > /etc/timezone
+     emerge --config sys-libs/timezone-data &>/dev/null
+
+     info "  Setting the default locale to: ${g_YELLOW_TEXT}$v_LOCALE${g_RESET_ATTS}."
+     sed -i "/$v_LOCALE/s/^# *//g" /etc/locale.gen
+     eselect locale set ${v_LOCALE}.utf8 &>/dev/null
+
+     env-update &>/dev/null && source /etc/profile
+}
+
+# Set the default keymap for your location.
+function set_keymap ()
+{
+     # (l_KEYMAP) - Local string value used to hold the KEYMAP global value while
+     # it is being manipulated.
+     local l_KEYMAP=""
+
+     l_KEYMAP="$(echo -e ${v_KEYMAP} | sed 's/^/"/;s/$/"/')"
+     l_KEYMAP="keymap=${l_KEYMAP}"
+
+     info "Setting the default keymap."
+     sed -i "s/^keymap=.*/${v_KEYMAP}/" /etc/conf.d/keymaps
+}
+
+# (processor_specific_features) - Function used to configue the processor
+# specific functions.
+function processor_specific_features ()
+{
+     # (l_CPU_FLAGS) - Local string value used to hold the CPU flags for the
+     # machines processors architecture.
+     local l_CPU_FLAGS_X86=""
+
+     info "Setting the CPU flags specific to the machines processor architecture."
+     
+     emerge --oneshot app-portage/cpuid2cpuflags &>/dev/null
+     l_CPU_FLAGS_X86="$(cpuid2cpuflags | sed 's/^CPU_FLAGS_X86: //g')"
+     l_CPU_FLAGS_X86="$(echo -e ${l_CPU_FLAGS_X86} | sed 's/^/"/;s/$/"/')"
+     l_CPU_FLAGS_X86="CPU_FLAGS_X86=${l_CPU_FLAGS_X86}"
+
+     sed -i "s/^CPU_FLAGS_X86.*/${l_CPU_FLAGS_X86}/g" /etc/portage/make.conf
+}
+
+# (bootstrap) - Function to bootstrap the new system.
+function bootstrap ()
+{
+     if ((v_BOOTSTRAP==1)); then
+          info "Building a new system toolchain."
+          
+          # Change to the cd "/usr/portage/scripts" directory.
+          if [ -f /usr/portage/scripts/bootstrap.sh ]; then
+               info "  Changing to the /usr/portage/scripts directory."
+               cd /usr/portage/scripts
+          else
+               error "The bootstrap script doesn't exist, check the stage three tarball."
+          fi
+          
+          # Edit the /usr/portage/scripts/bootstrap.sh to ensure the sys-libs/glibc is rebuilt.
+          info "  Updating the bootstrap.sh script to ensure that GCC is rebuilt."
+          sed -i '/^\[\[ -z ${myLIBC}.*/s/&&/;/' /usr/portage/scripts/bootstrap.sh
+          
+          # Backup the files that will be overwritten in this process.
+          if [ -f /etc/locale.gen ]; then
+               info "  Backing up the /etc/locale.gen file."
+               cp /etc/locale.gen{,.bak}
+          fi
+
+          if [ -f /etc/conf.d/keymaps ]; then
+               info "  Backing up the /etc/conf.d/keymaps file."
+               cp /etc/conf.d/keymaps{,.bak}
+          fi
+    
+          # Run the bootstrapping process.
+          info "  Bootstrapping a new system toolchain."
+          ./bootstrap.sh &>/dev/null
+
+          # If more than one C compiler is installed, choose the upgraded one.
+          info "  Verfiying the GCC configuration."
+          if [[ $(gcc-config --list-profiles | wc -l) > 1 ]]; then
+               warning "  More than one version of GCC exists, attempting to correct this issue."
+               gcc-config 1
+               env-update && source /etc/profile
+               emerge --oneshot sys-devel/libtool &>/dev/null
+               
+               # Re-run the /usr/portage/scripts/bootstrap.sh script to merge the libraries.
+               info "  Attempting to re-bootstrap the new system toolchain."
+               ./bootstrap.sh &>/dev/null
+          fi
+
+          # Restore the backed up files if they exist.
+          if [ -f /etc/locale.gen.bak ]; then
+               info "  Restoring the /etc/locale.gen file."
+               mv /etc/locale.gen{.bak,} &>/dev/null
+               locale-gen
+          fi
+
+          if [ -f /etc/conf.d/keymaps.bak ]; then
+               info "  Restoring the /etc/conf.d/keymaps.bak file."
+               mv /etc/conf.d/keymaps{.bak,} &>/dev/null
+          fi
+
+          # Change back to the root directory.
+          info "  Changing to the / directory."
+          cd /
+
+          # Rebuild every currently installed package.
+          info "  Creating the pre-build checkpoint file."
+          touch /tmp/prebuild_checkpoint
+          
+          info "  Rebuilding all existing packages."
+          emerge --emptytree --with-bdeps=y @world &>/dev/null
+
+          info "  Removing any unused packages."
+          emerge --depclean &>/dev/null
+
+          info "  Verifying the bootstrap."
+          if [[ -n $(find / -type d -path /boot/efi -prune -o -type f -executable -not -newer /tmp/prebuild_checkpoint -print0 2>/dev/null | xargs -0 file --no-pad --separator="@@@" | grep -iv '@@@.* text') ]] || [[ -n $(find / -type d -path /boot/efi -prune -o -type f -not -executable -not -newer /tmp/prebuild_checkpoint -print0 2>/dev/null | xargs -0 file --no-pad --separator="@@@" | grep '@@@.*\( ELF\| ar archive\)') ]]; then 
+               warning "  Bootstrap verification failure, rerunning the emerge."
+               emerge --emptytree --with-bdeps=y @world &>/dev/null
+
+               info "  Reverifying the bootstrap."
+               if [ ! -z `find / -type d -path /boot/efi -prune -o -type f -executable -not -newer /tmp/prebuild_checkpoint -print0 2>/dev/null | xargs -0 file --no-pad --separator="@@@" | grep -iv '@@@.* text'` ] || [ ! -z `find / -type d -path /boot/efi -prune -o -type f -not -executable -not -newer /tmp/prebuild_checkpoint -print0 2>/dev/null | xargs -0 file --no-pad --separator="@@@" | grep '@@@.*\( ELF\| ar archive\)'` ]; then 
+                    error "  Bootstrap verification failed."
+               fi
+          fi
+
+          eselect news read all &>/dev/null
+          eselect news purge
+     fi
+}
+
+# (update_world) - Function used to update the @world set.
+function update_world ()
+{
+     if ((v_BOOTSTRAP==0)); then
+          info "Bootstrap option not choosen, updating the @world set."
+          emerge --update --deep --newuse @world &>/dev/null
+
+          eselect news read all &>/dev/null
+          eselect news purge
+     fi
+}
+
+# (use_variable) - Function used to configurie the global USE variable.
+function use_variable ()
+{
+     # (l_USE) - Local string value used to hold the USE flags for the machine.
+     local l_USE=""
+
+     info "Setting the global USE variable."
+
+     if [ -z "$v_USE" ]; then
+          warning "  The Global USE variable was left unset in configuration file."
+     else
+          info "  Setting the global USE variable to the script default."
+
+          l_USE="$(echo -e ${v_USE} | sed 's/^/"/;s/$/"/')"
+          l_USE="USE=${l_USE}"
+
+          sed -i "s/^USE.*/${l_USE}/g" /etc/portage/make.conf
+     fi
+}
+
+# (kernel) - Function used to configuring the linux kernel.
+function kernel ()
+{
+     info "Configuring the linux kernel."
+     echo -e "# Accept all licenses surrounding the linux sources." >> /etc/portage/package.license
+     echo -e "*/* gentoo-sources" >> /etc/portage/package.license
+     echo -e "*/* linux-firmware" >> /etc/portage/package.license
+     echo -e "*/* freedist no-source-code" >> /etc/portage/package.license
+
+     emerge sys-kernel/gentoo-sources &>/dev/null
+     emerge sys-kernel/linux-firmware &>/dev/null
+     emerge sys-kernel/genkernel &>/dev/null
+}
+
+# (build_kernel) - Building kernel with genkernel.
+function build_kernel ()
+{
+     info "Building and installing the custom kernel."
+     genkernel --install all &>/dev/null
+}
+
+# (create_fstab) - Function used to sen the mountpoint tables using the
+# block devices GUID's.
+function create_fstab ()
+{
+     # (l_BLKID_<type>) - Local strings used to temporarily hold the block id extracted from
+     # the block devices.
+     local l_BLKID_EFI=""
+     local l_BLKID_BOOT=""
+     local l_BLKID_SYSROOT=""
+     local l_BLKID_HOME=""
+     local l_BLKID_TMP=""
+     local l_BLKID_VAR=""
+     local l_BLKID_SWAP=""
+     
+     info "Creating the filesystem table."
+     # Cleanup old filesystem table(s) if they exist.
+     if [ -f /etc/fstab ]; then
+          rm -f /etc/fstab
+     fi
+
+     # Write out the filesystem table header.
+     echo -e "# <fs>                                         <mountpoint>          <type>          <options>                                   <dump/pass>" >> /etc/fstab
+
+     if ((v_LVM==1 || v_DISK_ENCRYPTION==1)); then
+          # Retreive the UUID for the / partition.
+          l_BLKID_SYSROOT=$(blkid -s UUID ${v_LVM_DEV}/${v_LVM_VG_NAME}-root | sed -n 's/.*UUID=\"\([^\"]*\)\".*/\1/p')
+          echo -e "UUID=$l_BLKID_SYSROOT      /                     ext4            defaults,noatime,errors=remount-ro,discard  0 1" >> /etc/fstab
+          
+          # Retreive the PARTUUID for the /boot partition.
+          l_BLKID_BOOT=$(blkid -s PARTUUID $v_BOOT | sed -n 's/.*PARTUUID=\"\([^\"]*\)\".*/\1/p')
+          echo -e "PARTUUID=$l_BLKID_BOOT  /boot                 ext4            defaults,noatime,discard                    0 2" >> /etc/fstab
+          
+          # Retreive the PARTUUID for the /boot/efi partition.
+          l_BLKID_EFI=$(blkid -s PARTUUID $v_EFI | sed -n 's/.*PARTUUID=\"\([^\"]*\)\".*/\1/p')
+          echo -e "PARTUUID=$l_BLKID_EFI  /boot/efi             vfat            defaults,noatime                            1 2" >> /etc/fstab
+
+          # Retreive the UUID for the home partition.
+          l_BLKID_HOME=$(blkid -s UUID ${v_LVM_DEV}/${v_LVM_VG_NAME}-home | sed -n 's/.*UUID=\"\([^\"]*\)\".*/\1/p')
+          echo -e "UUID=$l_BLKID_HOME  /home                 ext4            defaults,noatime,discard                    0 2" >> /etc/fstab
+          
+          if ! [ -z $v_TMP ]; then
+               # Retreive the UUID for the tmp partition.
+               l_BLKID_TMP=$(blkid -s UUID ${v_LVM_DEV}/${v_LVM_VG_NAME}-tmp | sed -n 's/.*UUID=\"\([^\"]*\)\".*/\1/p')
+               echo -e "UUID=$l_BLKID_TMP  /tmp                  ext4            defaults,noatime,discard                    0 2" >> /etc/fstab
+          fi
+          
+          if ! [ -z $v_VAR ]; then
+               # Retreive the UUID for the var partition.
+               l_BLKID_VAR=$(blkid -s UUID ${v_LVM_DEV}/${v_LVM_VG_NAME}-var | sed -n 's/.*UUID=\"\([^\"]*\)\".*/\1/p')
+               echo -e "UUID=$l_BLKID_VAR  /var                  ext4            defaults,noatime,discard                    0 2" >> /etc/fstab
+          fi
+          
+          # Retreive the UUID for the swap partition.
+          l_BLKID_SWAP=$(blkid -s UUID ${v_LVM_DEV}/${v_LVM_VG_NAME}-swap | sed -n 's/.*UUID=\"\([^\"]*\)\".*/\1/p')
+          echo -e "PARTUUID=$l_BLKID_SWAP  none                  swap            defaults,noatime,discard                    0 0" >> /etc/fstab
+     else
+          # Retreive the UUID for the / partition.
+          l_BLKID_SYSROOT=$(blkid -s UUID $v_SYSROOT | sed -n 's/.*UUID=\"\([^\"]*\)\".*/\1/p')
+          echo -e "UUID=$l_BLKID_SYSROOT      /                     ext4            defaults,noatime,errors=remount-ro,discard  0 1" >> /etc/fstab
+
+          # Retreive the PARTUUID for the /boot partition.
+          l_BLKID_BOOT=$(blkid -s PARTUUID $v_BOOT | sed -n 's/.*PARTUUID=\"\([^\"]*\)\".*/\1/p')
+          echo -e "PARTUUID=$l_BLKID_BOOT  /boot                 ext4            defaults,noatime,discard                    0 2" >> /etc/fstab
+
+          # Retreive the PARTUUID for the /boot/efi partition.
+          l_BLKID_EFI=$(blkid -s PARTUUID $v_EFI | sed -n 's/.*PARTUUID=\"\([^\"]*\)\".*/\1/p')
+          echo -e "PARTUUID=$l_BLKID_EFI  /boot/efi             vfat            defaults,noatime                            1 2" >> /etc/fstab
+          
+          # Retreive the UUID for the swap partition.
+          l_BLKID_SWAP=$(blkid -s UUID $v_SWAP | sed -n 's/.*UUID=\"\([^\"]*\)\".*/\1/p')
+          echo -e "PARTUUID=$l_BLKID_SWAP  none                  swap            defaults,noatime,discard                    0 0" >> /etc/fstab
+     fi
+
+     # Remove leading spaces in front of each line in the file.
+     sed -i "s/^[ \t]*//" /etc/fstab
+
+     # Create a link to the mounts.
+     ln -sf /proc/self/mounts /etc/mtab
+}
+
+# (networking) - Function used to set the network after reboot.
+function networking ()
+{
+     # (l_NIC) - Local string value used to hold the name of the NIC.
+     local l_NIC=""
+
+     l_NIC=$(ip link | awk -F: '$0 !~ "lo|vir|wl|^[^0-9]"{print $2;getline}')
+     l_NIC=$(echo -e $l_NIC | sed -re 's/[[:space:]]\+/ /g')
+
+     info "Configuring the network."
+
+     # Install the DHCP client.
+     info "  Installing the DHCP client."
+     emerge net-misc/dhcpcd &>/dev/null
+
+     # Set the hostname for the system.
+     info "  Setting the systems hostname to: ${g_YELLOW_TEXT}${v_STAT_HOSTNAME}${g_RESET_ATTS}."
+     echo -e "hostname=\"${v_STAT_HOSTNAME}\"" >> /etc/conf.d/hostname
+
+     # Set the localhost dns_domain.
+     echo -e "# Set the dns_domain_lo variable to the selected domain name.\ndns_domain_lo=\"${v_STAT_DNS_DOMAIN}\"\n" >> /etc/conf.d/net
+
+     if ((v_STAT_DHCP == 1)); then
+          info "  Setting a dynamic network address on $l_NIC."
+
+          echo -e "# Dynamic settings for the ${l_NIC} Ethernet device." >> /etc/conf.d/net
+          echo -e "config_${l_NIC}=\"dhcp\"\n" >> /etc/conf.d/net
+     else
+          info "  Setting a static network address on $l_NIC."
+
+          echo -e "# Static settings for the ${l_NIC} Ethernet device." >> /etc/conf.d/net
+          echo -e "config_${l_NIC}=\"${v_STAT_IP_ADDRESS} netmask ${v_STAT_NETMASK}\"" >> /etc/conf.d/net
+          echo -e "routes_${l_NIC}=\"default via ${v_STAT_GATEWAY}\"" >> /etc/conf.d/net
+          echo -e "dns_servers_${l_NIC}=\"${v_STAT_DNS_1} ${v_STAT_DNS_2}\"" >> /etc/conf.d/net
+          echo -e "dns_domain_${l_NIC}=\"${v_STAT_DNS_DOMAIN}\"\n" >> /etc/conf.d/net
+     fi
+
+     # Automatically start networking at boot.
+     ln -s /etc/init.d/net.lo /etc/init.d/net.${l_NIC}
+     rc-update add net.${l_NIC} default &>/dev/null
+
+     # Establish an updated hosts file.
+     if [ -f /etc/hosts ]; then
+          rm -f /etc/hosts
+     fi
+
+     echo -e "# These entries define the current system and must be set." >> /etc/hosts
+     echo -e "127.0.0.1     ${v_STAT_HOSTNAME}.${v_STAT_DNS_DOMAIN}     ${v_STAT_HOSTNAME}     localhost\n" >> /etc/hosts
+}
+
+# Establish a root (Administrator) password.
+function root_password ()
+{
+     info "Setting the root password."
+     echo -e "root:${v_ADMIN_PASS}" | chpasswd
+}
+
+# Set the hardware clock to your systems location.
+function set_clock ()
+{
+     # (l_CLOCK) - Local string value used to hold the CLOCK global value while
+     # it is being manipulated.
+     local l_CLOCK=""
+
+     l_CLOCK="$(echo -e ${v_CLOCK} | sed 's/^/"/;s/$/"/')"
+     l_CLOCK="clock=${l_CLOCK}"
+
+     info "Setting the hardware clock to your systems location."
+     sed -i "s/^clock=.*/${v_CLOCK}/" /etc/conf.d/hwclock
+}
+
+# Install default applications.
+function default_applications ()
+{
+     info "Installing default software."
+     # Installing and configuring syslog-ng.
+     info "  Installing and configuring syslog-ng."
+     emerge app-admin/syslog-ng &>/dev/null
+     rc-update add syslog-ng default &>/dev/null
+
+     if [ -f /etc/syslog-ng/syslog-ng.conf ]; then
+          rm -f /etc/syslog-ng/syslog-ng.conf
+     fi
+
+     cat <<'EOF' >> /etc/syslog-ng/syslog-ng.conf
+     @version: 3.13
+     @include "scl.conf"
+
+     options { chain_hostnames(no); stats_freq(43200); };
+     source src { unix-stream("/dev/log"); internal(); };
+     source kernsrc { file("/proc/kmsg"); };
+
+
+     ########################
+     # Destinations
+     ########################
+     # Catch-All Logfiles.
+     destination d_debug { file("/var/log/debug"); };
+     destination d_messages { file("/var/log/messages"); };
+     destination d_error { file("/var/log/error"); };
+
+     # Root Console.
+     destination d_console_root { usertty("root"); };
+
+     # Virtual Console.
+     destination d_console_all { file("/dev/tty12"); };
+
+
+     ########################
+     # Filters
+     ########################
+     filter f_dbg { level(debug); };
+     filter f_debug { not facility(auth, authpriv, mail, news); };
+     filter f_messages { level(info..warn) and not facility(auth, authpriv, mail, news); };
+     filter f_info { level(info); };
+     filter f_notice { level(notice); };
+     filter f_warn { level(warn); };
+     filter f_warning { level(warn .. err); };
+     filter f_err { level(err); };
+     filter f_error { level(err .. emerg) ; };
+     filter f_crit { level(crit .. emerg); };
+     filter f_emergency { level(emerg); };
+
+     filter f_local { facility(local0, local1, local3, local4, local5, local6, local7) and not filter(f_debug); };
+
+     ########################
+     # Log Paths
+     ########################
+     log { source(src); filter(f_debug); destination(d_debug); };
+     log { source(src); filter(f_messages); destination(d_messages); };
+     log { source(src); filter(f_emergency); destination(d_console_root); };
+
+
+     ########################
+     # Application Logging
+     ########################
+     # Security and Authorization Logging.
+     destination d_authlog { file("/var/log/auth.log"); };
+     filter f_authpriv { facility(auth, authpriv) and not filter(f_debug); };
+     log { source(src); filter(f_authpriv); destination(d_authlog); };
+
+     # Cron Job Schedule Logging.
+     destination d_cron { file("/var/log/cron.log"); };
+     filter f_cron { facility(cron) and not filter(f_debug); };
+     log { source(src); filter(f_cron); destination(d_cron); };
+
+     # Daemon (Service) Logging.
+     destination d_daemon { file("/var/log/daemon.log"); };
+     filter f_daemon { facility(daemon) and not filter(f_debug); };
+     log { source(src); filter(f_daemon); destination(d_daemon); };
+
+     # Kernel Logging.
+     destination d_kern { file("/var/log/kern.log"); };
+     filter f_kern { facility(kern) and not filter(f_debug); };
+     log { source(kernsrc); filter(f_kern); destination(d_kern); };
+
+     # LinePrinter Logging.
+     destination d_lpr { file("/var/log/lpr.log"); };
+     filter f_lpr { facility(lpr) and not filter(f_debug); };
+     log { source(src); filter(f_lpr); destination(d_lpr); };
+
+     # Syslog Logging.
+     destination d_syslog { file("/var/log/syslog"); };
+     filter f_syslog { facility(syslog) and not filter(f_debug); };
+     log { source(src); filter(f_syslog); destination(d_syslog); };
+
+     # User Logging.
+     destination d_user { file("/var/log/user.log"); };
+     filter f_user { facility(user) and not filter(f_debug); };
+     log { source(src); filter(f_user); destination(d_user); };
+
+     # UUCP (Unix-to-Unix) Remote Execution Commands.
+     destination d_uucp { file("/var/log/uucp.log"); };
+     filter f_uucp { facility(uucp) and not filter(f_debug); };
+     log { source(src); filter(f_uucp); destination(d_uucp); };
+
+     # Logging for the mail system.
+     destination d_mail { file("/var/log/mail.log"); };
+     destination d_mailinfo { file("/var/log/mail.info"); };
+     destination d_mailwarn { file("/var/log/mail.warn"); };
+     destination d_mailerr { file("/var/log/mail.err"); };
+     filter f_mail { facility(mail) and not filter(f_debug); };
+     log { source(src); filter(f_mail); destination(d_mail); };
+     log { source(src); filter(f_mail); filter(f_info); destination(d_mailinfo); };
+     log { source(src); filter(f_mail); filter(f_warn); destination(d_mailwarn); };
+     log { source(src); filter(f_mail); filter(f_err); destination(d_mailerr); };
+
+     # Logging for the INN news system.
+     destination d_newscrit { file("/var/log/news/news.crit"); };
+     destination d_newserr { file("/var/log/news/news.err"); };
+     destination d_newsnotice { file("/var/log/news/news.notice"); };
+     filter f_news { facility(news) and not filter(f_debug); };
+     log { source(src); filter(f_news); filter(f_crit); destination(d_newscrit); };
+     log { source(src); filter(f_news); filter(f_err); destination(d_newserr); };
+     log { source(src); filter(f_news); filter(f_notice); destination(d_newsnotice); };
+
+     # SSHD Logging.
+     destination d_ssh { file("/var/log/ssh.log"); };
+     filter f_ssh { program("sshd"); };
+     log { source(src); filter(f_ssh); filter(f_warning); destination(d_ssh); };
+
+     # Default Log to Console.
+     log { source(src); destination(d_console_all); };
+
+     # Debug and Error Logging.
+     log { source(src); filter(f_debug); destination(d_debug); };
+     log { source(src); filter(f_error); destination(d_error); };
+EOF
+
+     # Remove leading spaces in front of each line in the file.
+     sed -i "s/^[ \t]*//" /etc/syslog-ng/syslog-ng.conf
+
+     if ((v_OPENRC == 0)); then
+          sed -i "s/^source src .*/source src { systemd-journal(); internal(); };/" /etc/syslog-ng/syslog-ng.conf
+     fi
+
+     # Installing and configuring cron.
+     info "  Installing and configuring cron."
+     emerge sys-process/cronie &>/dev/null
+     rc-update add cronie default &>/dev/null
+
+     # Installing and configuring logrotate.
+     info "  Installing and configuring logrotate."
+     emerge app-admin/logrotate &>/dev/null
+
+     # Installing and configuring portage tools.
+     info "  Installing and configuring portage tools."
+     emerge app-portage/{mirrorselect,eix,gentoolkit,euses} &>/dev/null
+}
+
+# Install and configure the ssh daemon.
+function set_sshd ()
+{
+     if ((v_SSH == 1)); then
+          info "Installing and configuring the ssh daemon."
+          emerge virtual/ssh &>/dev/null
+          rc-update add sshd default &>/dev/null
+
+          # If the file exists, remove it and set the new configuration.
+          if [ -f /etc/ssh/sshd_config ]; then
+               rm -f /etc/ssh/sshd_config
+          fi
+
+          cat<<EOF >> /etc/ssh/sshd_config
+          Port                            22
+          AddressFamily                   inet
+          ListenAddress                   0.0.0.0
+          Protocol                        2
+
+          HostKey                         /etc/ssh/ssh_host_rsa_key
+          HostKey                         /etc/ssh/ssh_host_dsa_key
+          HostKey                         /etc/ssh/ssh_host_ecdsa_key
+          HostKey                         /etc/ssh/ssh_host_ed25519_key
+
+          # Ciphers and keying.
+          #RekeyLimit default none
+
+          # Logging
+          SyslogFacility                  AUTH
+          LogLevel                        INFO
+
+          # Authentication:
+          LoginGraceTime                  2m
+          PermitRootLogin                 no
+          StrictModes                     yes
+          MaxAuthTries                    3
+          MaxSessions                     2
+          MaxStartups                     10:30:60
+
+          PubkeyAuthentication            yes
+          AuthorizedKeysFile              %h/.ssh/authorized_keys
+
+          PubkeyAuthentication            yes
+
+          #AuthorizedPrincipalsFile        none
+          #AuthorizedKeysCommand           none
+          #AuthorizedKeysCommandUser       nobody
+
+          # For this to work you will also need host keys in /etc/ssh/ssh_known_hosts.
+          HostbasedAuthentication         no
+
+          # Change to yes if you don't trust ~/.ssh/known_hosts for HostbasedAuthentication.
+          #IgnoreUserKnownHosts            no
+
+          # Don't read the user's ~/.rhosts and ~/.shosts files.
+          #IgnoreRhosts                    yes
+
+          # To disable tunneled clear text passwords, change to no here!
+          #PasswordAuthentication          yes
+          PermitEmptyPasswords            no
+
+          # Change to no to disable s/key passwords.
+          ChallengeResponseAuthentication no
+
+          # Kerberos Authentication:
+          #KerberosAuthentication          no
+          #KerberosOrLocalPasswd           yes
+          #KerberosTicketCleanup           yes
+          #KerberosGetAFSToken             no
+          #KerberosUseKuserok              yes
+
+          # GSSAPI Authentications:
+          #GSSAPIAuthentication            no
+          #GSSAPIKeyExchange               yes
+          #GSSAPICleanupCredentials        yes
+          #GSSAPIStrictAcceptorCheck       yes
+          #GSSAPIStoreCredentialsonRekey   no
+
+          #AllowAgentForwarding            yes
+          #AllowTcpForwarding              yes
+          #GatewayPorts                    no
+          X11Forwarding                   yes
+          X11DisplayOffset                10
+          #X11UseLocalhost                 yes
+          #PermitTTY                       yes
+          PrintMotd                       no
+          PrintLastLog                    yes
+          TCPKeepAlive                    yes
+          UsePAM                          yes
+
+          #PermitUserEnvironment           no
+          #Compression                     delayed
+          #ClientAliveInterval             0
+          #ClientAliveCountMax             3
+          #UseDNS                          no
+          #PidFile                         /run/sshd.pid
+          #PermitTunnel                    no
+          #ChrootDirectory                 none
+          #VersionAddendum                 none
+
+          # Default Banner.
+          Banner                          /etc/issue.net
+
+          # Override default of no subsystems.
+          Subsystem sftp /usr/lib/openssl/sftp-server
+
+          # The following are HPN related configuration options.
+          #TcpRcvBufPoll                   yes
+          #HPNDisabled                     no
+          #HPNBufferSize                   2048
+
+          # Allow the use of the none cipher.
+          #NoneEnabled                     no
+
+          # Example of overriding settings on a per-user basis.
+          #Match User anoncvs
+          #	X11Forwarding no
+          #	AllowTcpForwarding no
+          #	PermitTTY no
+          #	ForceCommand cvs server
+
+          # Allow client to pass locale environment variables #367017.
+          AcceptEnv                       LANG LC_*
+
+          #AllowUsers
+EOF
+          # Remove leading spaces in front of each line in the file.
+          sed -i "s/^[ \t]*//" /etc/ssh/sshd_config
+
+          # Set the SSH listen address based on the static IP if set.
+          if ((v_STAT_DHCP == 1)); then
+               # Set the ListenAddress to 0.0.0.0 and comment it out.
+
+               info "  Disabling the ListenAddress, no static address set."
+               sed -i "s/^ListenAddress.*/ListenAddress                   0.0.0.0/" /etc/ssh/sshd_config
+               sed -i "/ListenAddress/ s/^#*/#/" /etc/ssh/sshd_config
+          else
+               # Set the ListenAddress to the static IP address.
+
+               info "  Enabling the ListenAddress: $v_STAT_IP_ADDRESS."
+               sed -i "s/^ListenAddress.*/ListenAddress                   $v_STAT_IP_ADDRESS/" /etc/ssh/sshd_config
+          fi
+
+          # Set the allowed users value based on the configuration file.
+          if [ -z $v_ALLOW_USERS ]; then
+               # Comment out AllowedUsers if set.
+
+               info "  Disabling the AllowUsers setting in the sshd_config file."
+               sed -i "/AllowUsers/ s/^#*/#/" /etc/ssh/sshd_config
+          else
+               # Set AllowUsers and uncomment if set.
+
+               info "  Enabling the AllowUsers setting, setting to: $v_ALLOW_USERS."
+               sed -i "s/^#AllowUsers.*/AllowUsers                     $v_ALLOW_USERS/" /etc/ssh/sshd_config
+          fi
+
+          # Set the root (Administrator) account to login from SSH.
+          if ((v_PERMIT_ROOT_LOGIN == 1)); then
+               info "  Enabling the root account to login through ssh."
+               sed -i "s/^PermitRootLogin.*/PermitRootLogin                 yes/" /etc/ssh/sshd_config
+          else
+               info "  Disabling the root account from logging in through ssh."
+               sed -i "s/^PermitRootLogin.*/PermitRootLogin                 no/" /etc/ssh/sshd_config
+          fi
+
+          # SSH System Banner.
+          if ((v_BANNER == 1)); then
+               info "  Enabling the default SSH warning banner."
+
+               # If the file exists, remove it and set the new configuration.
+               if [ -f /etc/issue.net ]; then
+                    rm -f /etc/issue.net
+               fi
+
+               cat<<EOF >> /etc/issue.net
+               ****************************************************************************
+               ********************************* WARNING **********************************
+               ****************************************************************************
+               *                                                                          *
+               *   This computer  system is the private property of  its owner, whether   *
+               *   individual, corporate or government.  It is for authorized use only.   *
+               *   Users  (authorized or  unauthorized) have  no  explicit or  implicit   *
+               *   expectation of privacy.                                                *
+               *                                                                          *
+               *   Any or all uses of this system and all files on  this system  may be   *
+               *   intercepted, monitored,  recorded,  copied, audited, inspected,  and   *
+               *   disclosed to your employer, to authorized site, government,  and law   *
+               *   enforcement personnel, as well as authorized officials of government   *
+               *   agencies, both domestic and foreign.                                   *
+               *                                                                          *
+               *   By  using  this  system,  the  user  consents  to such interception,   *
+               *   monitoring, recording, copying, auditing, inspection, and disclosure   *
+               *   at the discretion of such  personnel or officials.   Unauthorized or   *
+               *   improper  USE  of  this  system  may  result  in civil  and criminal   *
+               *   penalties and administrative or disciplinary action, as appropriate.   *
+               *   By continuing  to use this  system you indicate  your  awareness  of   *
+               *   and  consent  to  these  terms  and  conditions  of  use.              *
+               *                                                                          *
+               *   LOG OFF IMMEDIATELY if you do not  agree to  the  conditions  stated   *
+               *   in this warning.                                                       *
+               ****************************************************************************
+EOF
+               # Remove leading spaces in front of each line in the file.
+               sed -i "s/^[ \t]*//" /etc/issue.net
+          else
+               # Comment out the default banner.
+
+               info "  Disabling the default SSH warning banner."
+               sed -i "s/Banner/ s/^#*/#/" /etc/ssh/sshd_config
+          fi
+     fi
+}
+
+# (install_grub) - Function to install and configure the GRUB bootloader.
+function install_grub ()
+{
+     # (l_BLKID_CRYPT) - Local string value used to hold the block id for the
+     # encrypted volume.
+     local l_BLKID_CRYPT=""
+     
+     # (l_BLKID_THUMB) - Local string value used to hold the block id for the
+     # password-protected thumb drive.
+     local l_BLKID_THUMB=""
+     
+     info "Install and configure the GRUB bootloader."
+
+     if ! cat /etc/portage/make.conf | grep -q "GRUB_PLATFORMS=\"efi-64\""; then
+          info "  Enabeling EFI."
+          echo -e "\n#Setup the GRUB bootloader to use the \"efi-64\" use flag.\nGRUB_PLATFORMS=\"efi-64\"" >> /etc/portage/make.conf
+     fi
+
+     info "  Installing the GRUB bootloader."
+     emerge sys-boot/grub:2 &>/dev/null
+     grub-install --target=x86_64-efi --efi-directory /boot/efi &>/dev/null
+
+     if ((v_DISK_ENCRYPTION==1)); then
+          # Update the GRUB Default Command Line.
+          info "  Applying the GRUB bootloader encryption setting."
+          l_BLKID_CRYPT=$(blkid -s UUID ${v_DISK_DEV}4 | sed -n 's/.*UUID=\"\([^\"]*\)\".*/\1/p')
+          l_BLKID_THUMB=$(blkid -s UUID ${v_THUMB_DEV}1 | sed -n 's/.*UUID=\"\([^\"]*\)\".*/\1/p')
+          
+          l_GRUB_CLI="crypt_root=UUID=$l_BLKID_CRYPT real_root=${v_LVM_DEV}/${v_LVM_VG_NAME}-root root_keydev=UUID=$l_BLKID_THUMB root_key=luks-key.gpg dolvm"
+
+          sed -i '/GRUB_CMDLINE_LINUX_DEFAULT=/s/^# *//' /etc/default/grub
+          sed -i 's|GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="'"$l_GRUB_CLI"'"|' /etc/default/grub
+
+          sed -i '/GRUB_TIMEOUT=/s/^# *//' /etc/default/grub
+          sed -i 's/GRUB_TIMEOUT=.*/GRUB_TIMEOUT=15/' /etc/default/grub
+     fi
+     
+     if ((v_LVM==1 || v_DISK_ENCRYPTION==1)); then
+          # Set the "use_lvmetad" variable to zero to eliminate any boot errors.
+          info "  Disabling LVM Metadata Caching."
+
+          if [ -f /etc/lvm/lvm.conf ]; then
+               sed -i 's/use_lvmetad = 1/use_lvmetad = 0/' /etc/lvm/lvm.conf
+          fi
+
+          if [ -f /boot/initramfs/etc/lvm/lvm.conf ]; then
+               sed -i 's/use_lvmetad = 1/use_lvmetad = 0/' /boot/initramfs/etc/lvm/lvm.conf
+          fi
+     fi
+     
+     info "  Setting the GRUB bootloader configuration file."
+     grub-mkconfig -o /boot/grub/grub.cfg &>/dev/null
+}
+
+# Cleanup and reboot the system.
+function cleanup_and_reboot ()
+{
+     info "Cleanup and reboot the system."
+     # Remove the installation script and configuration file from the Gentoo
+     # mountpoint provided they exist.
+     if [ -f "${v_INSTALL_MOUNTPOINT}/${g_PROGNAME}" ]; then
+          info "  Removing the install script from the Gentoo mountpoint."
+          rm -f ${v_INSTALL_MOUNTPOINT}/${g_PROGNAME}
+     fi
+
+     if [ -f "${v_INSTALL_MOUNTPOINT}/${g_CONFFILE}" ]; then
+          info "  Removing the configuration file from the Gentoo mountpoint."
+          rm -f "${v_INSTALL_MOUNTPOINT}/${g_CONFFILE}"
+     fi
+
+     unmount_mountpoints
+
+     # Disable EXIT trapping, otherwise when the script reboots the script may
+     # abnormally end.
+     trap - EXIT
+
+     # Reboot the system into the new enviornment.
+     reboot
+}
+
+################################################################################
+### MAIN SCRIPT CONTROL
+################################################################################
+process_command_line_options "${@}"
+internal_consistency_option_checks
+
+# If script debugging is enabled, disable error trapping and un-bound variable
+# checking.
+if ((v_DEBUG==1)); then
+     warning "The debug flag is set in the configuration file."
+     set_error_trapping 0
+fi
+
+################################################################################
+if ((g_ARG_REPAIR==1)); then
+     # If the repair option is selected, launch the repair enviornment.
+     if ((g_ARG_CHROOT==0)); then
+          script_banner
+          stage "1: Repairing the Gentoo Installation."
+         
+          repair_install
+          select_disk
+          mounting_root_partition
+          copy_dns
+          mount_subtree
+          prepare_chroot
+
+          # Disable errors when a command exits with a non-zero status.
+          set +e
+
+          # Disable error trapping.
+          trap - EXIT
+
+          info "Preparing the command prompt."
+          warning "You are now inside a repair enviornment.  Issue chroot $v_INSTALL_MOUNTPOINT /bin/bash."
+
+          # Error trapping has been disabled; exit the script.
+          exit 0
+     else
+          # Setting the prefix string to indicate that the script has entered the
+          # chroot enviornment.
+          g_PREFIXSTRING="*c "
+
+          inside_chroot
+          mount_boot
+          exit_chroot 0
+     fi
+else
+     if ((g_ARG_CHROOT==0)); then
+          # Used during script testing to blow away the LVM.
+          if ((g_ARG_FORCE_OVERWRITE==1)); then
+               forced_overwrite
+          fi
+
+          script_banner
+
+          ## Stage 1: Configuring the Network.
+          stage "1: Configuring the Network."
+
+          configure_network
+          check_internet
+
+          ## Stage 2: Preparing the disk(s).
+          stage "2: Preparing the disk(s)."
+
+          select_usbkey
+          select_disk
+          partition_usbkey
+          luks_encrypt
+          partition_disk
+          create_file_systems
+          mounting_root_partition
+
+          ## Stage 3: Installing the Gentoo stage tarball files.
+          stage "3: Installing the Gentoo stage tarball files."
+
+          cd $v_INSTALL_MOUNTPOINT
+          set_date
+          retreive_stage3
+          verify_stage3
+          unpack_stage3
+          configuring_compile_options
+          get_cflags
+          cd /
+
+          ## Stage 4: Installing the Gentoo base system.
+          stage "4: Installing the Gentoo base system."
+
+          distribution_files
+          ebuild_repository
+          copy_dns
+          mount_subtree
+          prepare_chroot
+
+          # Reset the prefix string to indicate that the script has exited the
+          # chroot enviornment.
+          g_PREFIXSTRING="*  "
+
+          info "Exiting the chroot enviornment with status: $?"
+          cleanup_and_reboot
+     else
+          # Setting the prefix string to indicate that the script has entered the
+          # chroot enviornment.
+          g_PREFIXSTRING="*c "
+
+          inside_chroot
+          mount_boot
+          update_portage
+          sync_portage
+          eselect_profile
+          timezone_locale          
+          set_keymap
+          processor_specific_features
+          bootstrap
+          update_world
+          use_variable
+          update_world
+          kernel
+          build_kernel
+          create_fstab
+          networking
+          root_password
+          set_clock
+          default_applications
+          set_sshd
+          install_grub
+
+          ## Stage 5: Clean up and reboot the system.
+          stage "5: Clean up and reboot the system."
+          exit_chroot 0
+     fi
+fi
+################################################################################
