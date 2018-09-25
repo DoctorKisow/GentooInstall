@@ -1,0 +1,44 @@
+### PROCESSOR ARCHITECTURE:
+# The install.db file is a semicolon ";" delimited file (database) that is
+# used to correctly set the gcc (GNU C Compiler) processor architecture to the
+# architecture of the host that Gentoo is being installed on.  If your processor
+# is not currently set the script will use the default "-O2 -pipe -march=native"
+# flags; the file is formatted in the following manner:
+# <processor architecture>;<chost>;<cflags>
+
+# Skylake
+i7-6700K;x86_64-pc-linux-gnu;-march=broadwell -O2 -pipe
+i7-7567U;x86_64-pc-linux-gnu;-march=broadwell -O2 -pipe
+i7-5600U;x86_64-pc-linux-gnu;-march=broadwell -O2 -pipe
+
+# Haswell
+E3-1271 v3;x86_64-pc-linux-gnu;-march=haswell -O2 -pipe
+i7-4770;x86_64-pc-linux-gnu;-march=haswell -O2 -pipe
+
+# Ivy Bridge
+i7-3610QM;x86_64-pc-linux-gnu;-march=ivybridge -O2 -pipe
+G2020;x86_64-pc-linux-gnu;-march=ivybridge -mno-avx -mno-aes -mno-rdrnd -O2 -pipe
+
+# Sandy Bridge
+i5-2400;x86_64-pc-linux-gnu;-march=sandybridge -O2 -pipe
+i7-3930K;x86_64-pc-linux-gnu;-march=sandybridge -O2 -pipe
+E31245;x86_64-pc-linux-gnu;-march=sandybridge -O2 -pipe
+E5-2407 0;x86_64-pc-linux-gnu;-march=sandybridge -O2 -pipe
+B960;x86_64-pc-linux-gnu;-march=sandybridge -mno-avx -mno-aes -mno-rdrnd -O2 -pipe
+
+# Nehalem
+i5-750;x86_64-pc-linux-gnu;-march=nehalem -O2 -pipe
+
+# Westmere
+i5-650;x86_64-pc-linux-gnu;-march=westmere -O2 -pipe
+
+# Intel Core
+CT7500;x86_64-pc-linux-gnu;-march=core2 -O2 -pipe
+3040;x86_64-pc-linux-gnu;-march=core2 -O2 -pipe
+E8400;x86_64-pc-linux-gnu;-march=core2 -O2 -pipe
+
+# Pentium M (Dothan)
+M processor;i686-pc-linux-gnu;-O2 -march=pentium-m -pipe
+
+# Pentium 4 (Prescott)
+4;x86_64-pc-linux-gnu;-O2 -march=nocona -pipe
