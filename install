@@ -42,7 +42,6 @@
 #   2) Add more options under "use_variables".
 #   3) Error check the configuration file.
 #   4) Include a function that configures the kernel to VMWare.
-#   5) Function to check if script is up-to-date.
 
 # Scroll to the bottom of this script to follow the main script flow.
 
@@ -486,32 +485,38 @@ function internal_consistency_option_checks ()
      fi
 }
 
+# (version) - Function used to compare version numbers  of two version numbers passed to it.
+function version ()
+{
+     test "$(printf '%s\n' "$@" | sort -V | head -n 1)" != "$1";
+}
+
 # (update) - Function used to check for and update this script from the git 
 # repository ensuring this script is consistently up-to-date.
-# TODO: Finish!
 function update ()
 {
      info "Checking for updates to the installation script."
-     emerge --oneshot dev-vcs/git &>/dev/null
+     
+     cd ${g_SCRIPT_PATH}
+     
+     # Get the version form the repository and source the file.
+     wget -c -q https://github.com/DoctorKisow/GentooInstall/raw/master/.version
+     source "${g_SCRIPT_PATH}/.version"
+     
+     # Compare the script versions and update if newer.
+     if version $v_VERSION $g_VERSION; then
+          info "  Updating the $g_PROGRAM_NAME script."
 
-     ARGS="$@"
-     BRANCH="Your_git_branch"
-
-          cd $g_SCRIPT_PATH
-          git fetch
-
-          [ -n $(git diff --name-only origin/$BRANCH | grep $g_PROGNAME) ] && {
-          echo "Found a new version of me, updating myself..."
-          git pull --force
-          git checkout $BRANCH
-          git pull --force
-          echo "Running the new version..."
-          exec "$g_PROGNAME" "$@"
-
-          # Now exit this old instance
-          exit 1
-     }
-          echo "Already the latest version."
+          # Get a new version of the script.
+          wget -c -q https://github.com/DoctorKisow/GentooInstall/raw/master/install
+          
+          # Backup the configuration file and download a new version.
+          mv ${g_SCRIPT_PATH}/install.conf ${g_SCRIPT_PATH}/install.conf.bak
+          wget -c -q https://github.com/DoctorKisow/GentooInstall/raw/master/install.conf
+          
+          # Get a new version of the database.
+          wget -c -q https://github.com/DoctorKisow/GentooInstall/raw/master/install.db
+     fi
 }
 
 # (repair_install) - Function used to repair an installation.
@@ -903,7 +908,17 @@ function create_file_systems ()
           # Overwriting the New Partition with Pseudo-Random Data.
           if ((v_PSEUDO_RANDOM==1)); then
                info "  Writing Pseudo-Random data to the LUKS encrypted volume on: ${g_YELLOW_TEXT}${v_LVM_LUKS_DEV}${g_RESET_ATTS}.\n           This could take a while based on the size of your encrypted volume."
+               
+               # Temporarially disable error trapping because "dd" causes an error when it
+               # reaches the end of the disk, disabling error trapping for this command allows
+               # the script to successfully run.
+               set_error_trapping 0
+               
+               # Write random datato the disk to mask the actual size of the encrypted volume.
                dd if=/dev/urandom of=${v_LVM_LUKS_DEV} bs=1M status=none > /dev/null 2>&1
+               
+               # Re-enable error trapping.
+               set_error_trapping 1
           fi
           
           # Encrypting the LVM volume with LUKS.
