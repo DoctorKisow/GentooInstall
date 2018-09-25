@@ -42,7 +42,6 @@
 #   2) Add more options under "use_variables".
 #   3) Error check the configuration file.
 #   4) Include a function that configures the kernel to VMWare.
-#   5) Function to check if script is up-to-date.
 
 # Scroll to the bottom of this script to follow the main script flow.
 
@@ -61,7 +60,7 @@ shopt -s nullglob
 g_PROGNAME="$(basename "${0}")"
 g_CONFFILE="${g_PROGNAME}.conf"
 g_DBFILE="${g_PROGNAME}.db"
-g_VERSION="0.0.1"
+g_VERSION="0.0.2"
 g_PROGRAM_NAME="Gentoo Install"
 g_PROGRAM_DESCRIPTION="A script to install Gentoo according to the handbook."
 g_COPYRIGHT_TEXT="Copyright (c) 2015-2018"
@@ -441,10 +440,18 @@ function internal_consistency_option_checks ()
                error "The database file doesn't exist.  Please download it from the same location that you downloaded this script from. - exiting" >&2
           fi
      fi
+
+     # If update is run with ANY other option exit.
+     if ((g_ARG_UPDATE==1)); then
+          if ((g_ARG_VERSION==1 || g_ARG_CHROOT==1 || g_ARG_HELP==1 || g_ARG_REPAIR==1 || g_ARG_FORCE_OVERWRITE==1)); then
+               warning "You cannot use the update option with any other option!"
+               cleanup_and_exit_with_code 1
+          fi
+     fi
      
      # If help is run with ANY other option exit.
      if ((g_ARG_HELP==1)); then
-          if ((g_ARG_VERSION==1 || g_ARG_CHROOT==1)); then
+          if ((g_ARG_VERSION==1 || g_ARG_CHROOT==1 || g_ARG_UPDATE==1 || g_ARG_REPAIR==1 || g_ARG_FORCE_OVERWRITE==1)); then
                warning "You cannot use the help option with any other option!"
                cleanup_and_exit_with_code 1
           fi
@@ -495,8 +502,7 @@ function version ()
      test "$(printf '%s\n' "$@" | sort -V | head -n 1)" != "$1";
 }
 
-# (update) - Function used to check for and update this script from the git 
-# repository ensuring this script is consistently up-to-date.
+# (update) - Function used to check for and update this script from the repository.
 function update ()
 {
      info "Checking for updates to the installation script."
@@ -521,6 +527,8 @@ function update ()
           # Get a new version of the database.
           wget -c -q https://github.com/DoctorKisow/GentooInstall/raw/master/install.db
      fi
+     
+     cleanup_and_exit_with_code 0
 }
 
 # (repair_install) - Function used to repair an installation.
@@ -2469,6 +2477,12 @@ function cleanup_and_reboot ()
 ################################################################################
 process_command_line_options "${@}"
 internal_consistency_option_checks
+
+# Update the script and supporting files and exit.
+if ((g_ARG_UPDATE==1)); then
+     update
+     exit 0
+fi
 
 # If script debugging is enabled, disable error trapping and un-bound variable
 # checking.
