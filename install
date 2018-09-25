@@ -42,6 +42,7 @@
 #   2) Add more options under "use_variables".
 #   3) Error check the configuration file.
 #   4) Include a function that configures the kernel to VMWare.
+#   5) Function to check if script is up-to-date.
 
 # Scroll to the bottom of this script to follow the main script flow.
 
@@ -111,6 +112,7 @@ g_SCRIPT_PATH="`( cd \"$g_SCRIPT_PATH\" && pwd )`"
 declare -i g_ARG_CHROOT=0
 declare -i g_ARG_HELP=0
 declare -i g_ARG_REPAIR=0
+declare -i g_ARG_UPDATE=0
 declare -i g_ARG_VERSION=0
 declare -i g_ARG_FORCE_OVERWRITE=0
 
@@ -349,6 +351,7 @@ function print_usage ()
                             configuration file parameters
     -h, --help              show this help message and exit
     -r, --repair            repair an installation
+    -u, --update            update the script
     -v, --version           display the version number of ${g_PROGNAME} and exit
 EOF
 }
@@ -392,7 +395,7 @@ function process_command_line_options ()
 
      # Error trapping is turned off because we want to handle errors.
      set +e
-          l_TEMP="$(getopt -o cFhrv --long chroot,forced-overwrite,help,repair,version -n "${g_PROGNAME}" -- "${@}")"
+          l_TEMP="$(getopt -o cFhruv --long chroot,forced-overwrite,help,repair,update,version -n "${g_PROGNAME}" -- "${@}")"
           l_RC="${?}"
      set -e
 
@@ -409,6 +412,7 @@ function process_command_line_options ()
           -F|--forced-overwrite) g_ARG_FORCE_OVERWRITE=1; shift;;
           -h|--help) g_ARG_HELP=1; shift ;;
           -r|--repair) g_ARG_REPAIR=1; shift ;;
+          -u|--update) g_ARG_UPDATE=1; shift ;;
           -v|--version) g_ARG_VERSION=1; shift ;;
           --) shift; break ;;
            *) print_usage ;;
