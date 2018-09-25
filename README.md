@@ -1,25 +1,21 @@
 ## Gentoo Install Script
-**install** - A script to install Gentoo according to the handbook.  
-Matthew R. Kisow, D.Sc. <matthew.kisow@kisow.org>  
-Copyright &copy; Kisow Foundation, Inc.&reg; 2015-2017.
+A script that installs the Gentoo operating system without end-user intervention; using industry best practice methodology and according to the Gentoo handbook.  
 
 ## Getting Started
-**Assumptions**  
-This script assumes the following:  
+### Prerequisites  
+The following assumptions are made:  
    1. You know how to get the installation media from the Gentoo repository.  
    2. You know how to make the installation media bootable.  
    3. You are familiar with networking and are able to setup the installation media to connect to the Internet.  
 
-**Variable Definition**  
-This script uses the following prefixes to define variables:  
+### Install 
+Using git install the script from this repository.  
+```script
+   curl -LJO https://github.com/DoctorKisow/GentooInstall
 ```
-   g) (g_<variable name>) - Global declaration, variables defined for use throughout
-                            the scripts execution.
-   l) (l_<variable name>) - Local declaration, variables defined for use in function(s),
-                            local variables cannot be accessed globally.
-   v) (v_<variable name>) - Variable declaration, variables defined in the configuration
-                            file and are used globally throughout the scripts execution.
-```
+
+## Authors
+Matthew R. Kisow, D.Sc. - **Initial Work** - [GentooInstall](https://github.com/DoctorKisow/GentooInstall)  
 
 ## License
 License (GPL v3.0)
@@ -31,11 +27,6 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 You should have received a copy of the GNU General Public License along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 ## Acknowledgments
-This script is based on [ **Sakaki's EFI Install Guide** ](https://wiki.gentoo.org/wiki/Sakaki's_EFI_Install_Guide) and has been expanded to permit both workstation and server installations in a variety of different configurations per best-practice installation.
-
-## TODO
-  1. Update the "get_cflags" function with all Intel processors.  
-  2. Add more options under "use_variables".  
-  3. Error check the configuration file.  
-  4. Include a function that configures the kernel to VMWare.  
-  5. Function to check if script is up-to-date.  
+This script was developed using industry best-practice methodology and the following :
+* [**Gentoo Handbook**](https://wiki.gentoo.org/wiki/Complete_Handbook).
+* [**Sakaki's EFI Install Guide**](https://wiki.gentoo.org/wiki/Sakaki's_EFI_Install_Guide) 
